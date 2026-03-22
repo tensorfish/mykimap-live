@@ -15,10 +15,7 @@ const STALE_COLOR: [number, number, number] = [100, 100, 100];
 const DIMMED_COLOR: [number, number, number, number] = [80, 80, 80, 80];
 
 const MODE_SIZE: Record<TransportMode, number> = {
-  metro: 28,
-  tram: 22,
-  bus: 14,
-  vline: 28,
+  metro: 28, tram: 22, bus: 14, vline: 28,
 };
 
 // ── Arrow icon ──
@@ -29,39 +26,20 @@ function getArrowIconUrl(): string {
   return arrowIconUrl;
 }
 
-// ── Continuous projection state ──
-//
-// Each vehicle has an "anchor" — its last known server position.
-// Every frame, we project forward from the anchor using speed + bearing.
-// When a new tick arrives, we smoothly blend from the projected position
-// to the new anchor over CORRECTION_MS to avoid snapping.
+// ── Continuous projection engine ──
 
 const DEG_TO_RAD = Math.PI / 180;
 
 interface Anchor {
-  /** Server-sent position (the ground truth) */
   lon: number;
   lat: number;
   bearing: number;
-  speed: number; // m/s
-  /** When this anchor was received */
+  speed: number;
   receivedAt: number;
-  /** Position we were projecting to when the correction started */
-  correctionFromLon: number;
-  correctionFromLat: number;
-  correctionFromBearing: number;
-  /** Whether we're in a correction blend */
-  correcting: boolean;
 }
 
 const anchors = new Map<string, Anchor>();
-const CORRECTION_MS = 300; // Blend from projected → new anchor over this duration
 
-/**
- * Called when a new server tick arrives.
- * Updates anchors for all vehicles. If a vehicle was already being
- * projected, we record where it was so we can blend to the new position.
- */
 export function updateAnchors(vehicles: VehiclePosition[]): void {
   const now = Date.now();
   const seen = new Set<string>();
@@ -70,35 +48,22 @@ export function updateAnchors(vehicles: VehiclePosition[]): void {
     seen.add(v.entityId);
     const existing = anchors.get(v.entityId);
 
-    if (existing && (existing.lon !== v.longitude || existing.lat !== v.latitude)) {
-      // Vehicle moved — record where we were projecting to, then update anchor
-      const projected = projectFromAnchor(existing, now);
-      existing.correctionFromLon = projected[0];
-      existing.correctionFromLat = projected[1];
-      existing.correctionFromBearing = existing.bearing;
-      existing.correcting = true;
+    if (existing) {
+      // Always update anchor to latest server position.
+      // The projection runs forward from here.
       existing.lon = v.longitude;
       existing.lat = v.latitude;
       existing.bearing = v.bearing;
       existing.speed = v.speed;
       existing.receivedAt = now;
-    } else if (!existing) {
-      // New vehicle — no correction needed, just set anchor
+    } else {
       anchors.set(v.entityId, {
         lon: v.longitude,
         lat: v.latitude,
         bearing: v.bearing,
         speed: v.speed,
         receivedAt: now,
-        correctionFromLon: v.longitude,
-        correctionFromLat: v.latitude,
-        correctionFromBearing: v.bearing,
-        correcting: false,
       });
-    } else {
-      // Same position — just update speed/bearing if changed
-      existing.speed = v.speed;
-      if (v.bearing !== 0) existing.bearing = v.bearing;
     }
   }
 
@@ -107,86 +72,72 @@ export function updateAnchors(vehicles: VehiclePosition[]): void {
   }
 }
 
-/**
- * Project a vehicle forward from its anchor by elapsed time.
- * Simple flat-earth approximation — accurate enough for < 30s of projection.
- */
-function projectFromAnchor(a: Anchor, now: number): [number, number] {
-  if (a.speed < 0.5) return [a.lon, a.lat];
-
-  const elapsedSec = (now - a.receivedAt) / 1000;
-  const distM = a.speed * elapsedSec;
-
-  const bearingRad = a.bearing * DEG_TO_RAD;
-  const latOffset = (distM * Math.cos(bearingRad)) / 111_000;
-  const lonOffset = (distM * Math.sin(bearingRad)) / (111_000 * Math.cos(a.lat * DEG_TO_RAD));
-
-  return [a.lon + lonOffset, a.lat + latOffset];
+/** Pre-computed per-frame display data for one vehicle */
+interface DisplayVehicle {
+  entityId: string;
+  mode: TransportMode;
+  position: [number, number];
+  angle: number;
+  stale: boolean;
+  routeId: string;
+  vehicleId: string;
+  vehicleLabel: string;
+  bearing: number;
+  speed: number;
 }
 
 /**
- * Get the display position for a vehicle right now.
- * Projects forward from anchor, with correction blending if needed.
+ * Compute display positions for ALL vehicles at the current instant.
+ * Called every requestAnimationFrame. Returns a new array each time
+ * so deck.gl always re-evaluates.
  */
-function getDisplayPosition(entityId: string, serverLon: number, serverLat: number, now: number): [number, number] {
-  const a = anchors.get(entityId);
-  if (!a) return [serverLon, serverLat];
+export function computeDisplayVehicles(vehicles: VehiclePosition[]): DisplayVehicle[] {
+  const now = Date.now();
 
-  // Project forward from the anchor
-  const projected = projectFromAnchor(a, now);
+  return vehicles.map((v) => {
+    const a = anchors.get(v.entityId);
 
-  if (!a.correcting) return projected;
+    let lon = v.longitude;
+    let lat = v.latitude;
 
-  // Blend from old projected position to new projected position
-  const correctionElapsed = now - a.receivedAt;
-  if (correctionElapsed >= CORRECTION_MS) {
-    a.correcting = false;
-    return projected;
-  }
+    if (a && a.speed >= 0.5 && !v.stale) {
+      const elapsedSec = (now - a.receivedAt) / 1000;
+      const distM = a.speed * elapsedSec;
+      const bearingRad = a.bearing * DEG_TO_RAD;
+      lat = a.lat + (distM * Math.cos(bearingRad)) / 111_000;
+      lon = a.lon + (distM * Math.sin(bearingRad)) / (111_000 * Math.cos(a.lat * DEG_TO_RAD));
+    }
 
-  const t = correctionElapsed / CORRECTION_MS;
-  // Ease out for smooth deceleration into the correct position
-  const ease = 1 - (1 - t) * (1 - t);
-
-  return [
-    a.correctionFromLon + ease * (projected[0] - a.correctionFromLon),
-    a.correctionFromLat + ease * (projected[1] - a.correctionFromLat),
-  ];
-}
-
-function getDisplayBearing(entityId: string, serverBearing: number, now: number): number {
-  const a = anchors.get(entityId);
-  if (!a || !a.correcting) return -serverBearing;
-
-  const correctionElapsed = now - a.receivedAt;
-  if (correctionElapsed >= CORRECTION_MS) return -serverBearing;
-
-  const t = correctionElapsed / CORRECTION_MS;
-  const ease = 1 - (1 - t) * (1 - t);
-  let from = -a.correctionFromBearing;
-  let to = -serverBearing;
-  let diff = to - from;
-  if (diff > 180) diff -= 360;
-  if (diff < -180) diff += 360;
-  return from + ease * diff;
+    return {
+      entityId: v.entityId,
+      mode: v.mode,
+      position: [lon, lat] as [number, number],
+      angle: -(a?.bearing ?? v.bearing),
+      stale: v.stale,
+      routeId: v.routeId,
+      vehicleId: v.vehicleId,
+      vehicleLabel: v.vehicleLabel,
+      bearing: v.bearing,
+      speed: v.speed,
+    };
+  });
 }
 
 // ── Vehicle arrow layer ──
 
 export function createVehicleLayer(
-  vehicles: VehiclePosition[],
+  displayVehicles: DisplayVehicle[],
   selectedId: string | null
 ) {
-  const now = Date.now();
   const hasSelection = selectedId !== null;
 
-  return new IconLayer<VehiclePosition>({
+  return new IconLayer<DisplayVehicle>({
     id: "vehicles",
-    data: vehicles,
+    data: displayVehicles,
     iconAtlas: getArrowIconUrl(),
     iconMapping: ARROW_ICON_MAPPING,
     getIcon: () => "arrow",
-    getPosition: (d) => getDisplayPosition(d.entityId, d.longitude, d.latitude, now),
+    getPosition: (d) => d.position,
     getColor: (d) => {
       if (hasSelection && d.entityId !== selectedId) return DIMMED_COLOR;
       if (d.stale) return [...STALE_COLOR, 160];
@@ -196,7 +147,7 @@ export function createVehicleLayer(
       if (hasSelection && d.entityId === selectedId) return MODE_SIZE[d.mode] * 1.4;
       return MODE_SIZE[d.mode];
     },
-    getAngle: (d) => getDisplayBearing(d.entityId, d.bearing, now),
+    getAngle: (d) => d.angle,
     sizeScale: 1,
     sizeUnits: "pixels" as const,
     sizeMinPixels: 8,
@@ -215,10 +166,7 @@ interface TrailData {
 }
 
 const TRAIL_WIDTH: Record<TransportMode, number> = {
-  metro: 3,
-  tram: 2.5,
-  bus: 1.5,
-  vline: 3,
+  metro: 3, tram: 2.5, bus: 1.5, vline: 3,
 };
 
 export function createTrailLayer(
@@ -262,7 +210,7 @@ export function createTrailLayer(
   });
 }
 
-// ── Full route shape layer (shown when a vehicle is selected) ──
+// ── Full route shape layer ──
 
 export function createRouteShapeLayer(
   routeShape: Array<[number, number]> | null,

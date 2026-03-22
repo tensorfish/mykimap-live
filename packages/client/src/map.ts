@@ -1,11 +1,9 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
-import type { VehiclePosition } from "./types.js";
+import type { VehiclePosition, TransportMode } from "./types.js";
 import { store, getVehicles, getTrails, getSelectedEntityId, getRouteShape, selectVehicle } from "./store.js";
-import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, updateAnchors } from "./layers.js";
-import type { TransportMode } from "./types.js";
+import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, updateAnchors, computeDisplayVehicles } from "./layers.js";
 
-// Melbourne CBD
 const INITIAL_VIEW = {
   longitude: 144.963,
   latitude: -37.814,
@@ -33,7 +31,6 @@ export function initMap(
     antialias: true,
   });
 
-  // deck.gl as passive overlay — Mapbox owns all mouse interaction
   deck = new Deck({
     parent: container,
     viewState: INITIAL_VIEW,
@@ -47,62 +44,74 @@ export function initMap(
     },
   });
 
-  // Cursor: pointer when hovering over a vehicle arrow
+  // Cursor: pointer on hover over vehicle arrows
   map.on("mousemove", (e) => {
     if (!deck) return;
     const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
     map.getCanvas().style.cursor = picked?.object?.entityId ? "pointer" : "";
   });
 
-  // Click handler: use Mapbox's click event + deck.pickObject()
+  // Click: select/deselect vehicle
   map.on("click", (e) => {
     if (!deck) return;
-    const picked = deck.pickObject({
-      x: e.point.x,
-      y: e.point.y,
-      radius: 10,
-    });
+    const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
     if (picked?.object?.entityId) {
-      const currentSelected = getSelectedEntityId();
-      if (currentSelected === picked.object.entityId) {
-        selectVehicle(null);
-      } else {
-        selectVehicle(picked.object.entityId);
-      }
+      const current = getSelectedEntityId();
+      selectVehicle(current === picked.object.entityId ? null : picked.object.entityId);
     } else {
       selectVehicle(null);
     }
   });
 
-  // Sync deck.gl viewState whenever Mapbox moves
-  function syncViewState() {
+  // Sync deck.gl viewState on Mapbox move
+  map.on("move", () => {
     if (!deck) return;
-    const center = map.getCenter();
+    const c = map.getCenter();
     deck.setProps({
       viewState: {
-        longitude: center.lng,
-        latitude: center.lat,
+        longitude: c.lng,
+        latitude: c.lat,
         zoom: map.getZoom(),
         pitch: map.getPitch(),
         bearing: map.getBearing(),
       },
     });
-  }
+  });
 
-  map.on("move", syncViewState);
-
-  // ── Render loop ──
+  // ── State ──
 
   let currentVehicles: VehiclePosition[] = [];
   let currentTrails: Record<string, Array<[number, number]>> = {};
-  let animFrameId: number | null = null;
+
+  // Update anchors when new data arrives from the server
+  store.subscribe(() => {
+    const vehicles = getVehicles();
+    const trails = getTrails();
+    if (vehicles.length === 0) return;
+
+    updateAnchors(vehicles);
+    currentVehicles = vehicles;
+    currentTrails = trails;
+  });
+
+  // ── 60fps render loop ──
+  // Runs continuously. Each frame computes fresh projected positions
+  // for all vehicles using their speed + bearing + elapsed time.
+  // This is what makes the arrows move smoothly — not server ticks.
 
   function renderFrame() {
-    if (!deck) return;
+    if (!deck || currentVehicles.length === 0) {
+      requestAnimationFrame(renderFrame);
+      return;
+    }
+
     const selectedId = getSelectedEntityId();
     const routeShape = getRouteShape();
 
-    // Find the selected vehicle's mode for route shape coloring
+    // Compute projected positions for THIS frame
+    const displayVehicles = computeDisplayVehicles(currentVehicles);
+
+    // Find selected mode for route shape coloring
     let selectedMode: TransportMode | null = null;
     if (selectedId) {
       const v = currentVehicles.find((v) => v.entityId === selectedId);
@@ -113,26 +122,15 @@ export function initMap(
       layers: [
         createRouteShapeLayer(routeShape, selectedMode),
         createTrailLayer(currentVehicles, currentTrails, selectedId),
-        createVehicleLayer(currentVehicles, selectedId),
+        createVehicleLayer(displayVehicles, selectedId),
       ],
     });
-    animFrameId = requestAnimationFrame(renderFrame);
+
+    requestAnimationFrame(renderFrame);
   }
 
-  // Re-render on data changes
-  store.subscribe(() => {
-    const vehicles = getVehicles();
-    const trails = getTrails();
-    if (vehicles.length === 0) return;
-
-    updateAnchors(vehicles);
-    currentVehicles = vehicles;
-    currentTrails = trails;
-
-    if (!animFrameId) {
-      animFrameId = requestAnimationFrame(renderFrame);
-    }
-  });
+  // Start the render loop immediately — it will render once data arrives
+  requestAnimationFrame(renderFrame);
 
   map.on("load", () => {
     onReady();
