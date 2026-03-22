@@ -14,6 +14,7 @@ const sm = new ServerStateMachine();
 let currentVehicles: VehiclePosition[] = [];
 let currentAlerts: ServiceAlert[] = [];
 let lastPollTimestamp = 0;
+let lastHeaderTimestamp = 0;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let broadcastTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -57,10 +58,10 @@ async function boot(): Promise<void> {
     const result = await poll();
 
     if (result.hasPositions) {
-      const headerTimestamp = Math.floor(Date.now() / 1000);
-      currentVehicles = processSnapshot(result.vehicles, headerTimestamp);
+      currentVehicles = processSnapshot(result.vehicles, result.headerTimestamp);
       currentAlerts = result.alerts;
       lastPollTimestamp = Date.now();
+      lastHeaderTimestamp = result.headerTimestamp;
       firstPollSuccess = true;
       break;
     }
@@ -104,9 +105,20 @@ async function pollCycle(): Promise<void> {
     const result = await poll();
 
     if (result.hasPositions) {
-      const headerTimestamp = Math.floor(Date.now() / 1000);
-      currentVehicles = processSnapshot(result.vehicles, headerTimestamp);
-      currentAlerts = result.alerts;
+      const isFresh = result.headerTimestamp > lastHeaderTimestamp;
+
+      if (isFresh) {
+        // Feed data changed — process the new snapshot
+        currentVehicles = processSnapshot(result.vehicles, result.headerTimestamp);
+        currentAlerts = result.alerts;
+        lastHeaderTimestamp = result.headerTimestamp;
+        log("info", `Fresh data`, { headerTimestamp: result.headerTimestamp, vehicles: currentVehicles.length });
+
+        // FUTURE: recorder.insert(snapshot) goes here — only on fresh data
+      } else {
+        log("debug", `Duplicate poll skipped (header timestamp unchanged: ${result.headerTimestamp})`);
+      }
+
       lastPollTimestamp = Date.now();
 
       // Recover from degraded/stale back to running

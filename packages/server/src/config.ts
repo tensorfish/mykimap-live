@@ -24,8 +24,8 @@ export const config = {
   port: parseInt(optionalEnv("SERVER_PORT", "3000"), 10),
   host: optionalEnv("SERVER_HOST", "0.0.0.0"),
 
-  /** Polling intervals — 7s catches feed changes fast; feed caches ~30s server-side so some polls return identical data */
-  pollIntervalMs: parseInt(optionalEnv("POLL_INTERVAL_MS", "7000"), 10),
+  /** Polling intervals — 15s against a ~30s server-side cache means we catch each refresh within one poll */
+  pollIntervalMs: parseInt(optionalEnv("POLL_INTERVAL_MS", "15000"), 10),
   broadcastIntervalMs: parseInt(
     optionalEnv("BROADCAST_INTERVAL_MS", "1000"),
     10

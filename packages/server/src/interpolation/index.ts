@@ -93,7 +93,8 @@ export function processSnapshot(
       const dt = v.timestamp - prev.targetTimestamp;
 
       if (dt > 0) {
-        // Calculate speed
+        // Vehicle timestamp changed — new data from the feed.
+        // Calculate speed from position delta.
         let dist: number;
         if (snapDist >= 0 && prev.targetShapeDist >= 0) {
           dist = Math.abs(snapDist - prev.targetShapeDist);
@@ -119,32 +120,34 @@ export function processSnapshot(
             v.longitude
           );
         }
+
+        // Promote: previous target becomes origin, new position becomes target
+        vehicleStates.set(v.entityId, {
+          originLat: prev.targetLat,
+          originLon: prev.targetLon,
+          originShapeDist: prev.targetShapeDist,
+          originTimestamp: prev.targetTimestamp,
+
+          targetLat: v.latitude,
+          targetLon: v.longitude,
+          targetShapeDist: snapDist,
+          targetTimestamp: v.timestamp,
+
+          bearing: v.bearing,
+          speed: v.speed,
+          shapeId: v.shapeId,
+          targetReceivedAt: nowMs,
+          travelTimeMs: Math.max(dt * 1000, config.pollIntervalMs),
+        });
       } else {
+        // Same timestamp — feed cache returned identical data.
+        // Carry forward speed/bearing but do NOT reset targetReceivedAt.
+        // This lets the interpolation engine keep projecting forward
+        // past the target using the last known speed.
         v.speed = prev.speed;
         if (v.bearing === 0) v.bearing = prev.bearing;
+        // Don't update vehicleStates — keep the existing origin/target/receivedAt
       }
-
-      // Promote: previous target becomes origin, new position becomes target
-      vehicleStates.set(v.entityId, {
-        originLat: prev.targetLat,
-        originLon: prev.targetLon,
-        originShapeDist: prev.targetShapeDist,
-        originTimestamp: prev.targetTimestamp,
-
-        targetLat: v.latitude,
-        targetLon: v.longitude,
-        targetShapeDist: snapDist,
-        targetTimestamp: v.timestamp,
-
-        bearing: v.bearing,
-        speed: v.speed,
-        shapeId: v.shapeId,
-        targetReceivedAt: nowMs,
-        travelTimeMs: Math.max(
-          (v.timestamp - prev.targetTimestamp) * 1000,
-          config.pollIntervalMs
-        ),
-      });
     } else {
       // First sighting — no origin yet, can't interpolate
       vehicleStates.set(v.entityId, {

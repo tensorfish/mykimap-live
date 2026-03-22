@@ -17,10 +17,10 @@ The live map is interesting for 30 seconds. A time-lapse of an entire city's tra
 | Metric | Value |
 |---|---|
 | Snapshot size | ~2,000 vehicles × ~100 bytes ≈ 200 KB |
-| Snapshots per day | ~12,300 (one per 7s poll) |
+| Snapshots per day | ~5,760 (one per 15s poll) |
 | Rows per day | ~24.6M (2,000 vehicles × 12,300 snapshots) |
 | Raw daily volume | ~2.4 GB |
-| DuckDB compressed | Estimated < 300 MB/day (columnar compression, many repeated positions between 7s polls) |
+| DuckDB compressed | Estimated < 200 MB/day (columnar compression, every poll should contain fresh data at 15s interval) |
 
 ---
 
@@ -66,7 +66,7 @@ CREATE TABLE snapshots (
 );
 ```
 
-- **Write strategy:** Batch insert after each poll — one `INSERT INTO snapshots VALUES (?, ?, ...), (?, ?, ...), ...` with ~2,000 rows. DuckDB handles this in < 10ms.
+- **Write strategy:** Batch insert only when the poll contains fresh data (header timestamp changed from previous poll). Duplicate polls (same header timestamp due to ~30s feed cache) are skipped — no redundant rows. The dedup check already exists in `pollCycle()` via `lastHeaderTimestamp`. Each fresh insert is ~2,000 rows. DuckDB handles this in < 10ms.
 - **Non-blocking:** The insert is fire-and-forget with error logging. Poll/broadcast must not wait on slow disk.
 - **Optional:** Controlled by `RECORDING_ENABLED` env var (default: `false`). When disabled, no DuckDB instance is created, zero overhead.
 - **Retention:** Configurable via `RECORDING_RETENTION_DAYS` env var (default: `30`). On startup, delete `.duckdb` files older than the threshold.
@@ -142,7 +142,7 @@ RECORDING_DATA_DIR=.data/snapshots
 - Non-fatal: if DuckDB init fails, log warning and continue without recording
 - No client changes
 
-**Validation:** Enable recording, run server for 5 minutes. `.data/snapshots/YYYY-MM-DD.duckdb` exists. Query it with `duckdb` CLI: `SELECT COUNT(*) FROM snapshots` returns > 0. `SELECT COUNT(DISTINCT timestamp) FROM snapshots` shows ~43 distinct timestamps (5 min ÷ 7s). Disable recording, restart — no `.duckdb` file created.
+**Validation:** Enable recording, run server for 5 minutes. `.data/snapshots/YYYY-MM-DD.duckdb` exists. Query it with `duckdb` CLI: `SELECT COUNT(*) FROM snapshots` returns > 0. `SELECT COUNT(DISTINCT timestamp) FROM snapshots` shows ~20 distinct timestamps (5 min ÷ 15s). Disable recording, restart — no `.duckdb` file created.
 
 ### Phase B: Parquet export endpoint
 - Add `GET /data/snapshots/:date` to server HTTP routes

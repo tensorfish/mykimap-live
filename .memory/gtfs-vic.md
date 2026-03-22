@@ -72,7 +72,7 @@ From the `x-rate-limit` response header:
 
 **Feed cache TTL: ~30 seconds.** Polling faster returns identical data, but reduces latency to detect changes.
 
-**Our polling interval: 7 seconds.** Most polls return the same data. But when the feed does refresh, we catch it within 7s instead of waiting up to 30s. With 10 feeds at 7s, that's ~86 requests per minute — still well within the ~20 req/30s per-endpoint limit (we hit each endpoint ~4 times per 30s window).
+**Our polling interval: 15 seconds.** With a ~30s cache, every second poll should contain fresh data. With 10 feeds at 15s, that's ~40 requests per minute — well within the ~20 req/30s per-endpoint limit (we hit each endpoint ~2 times per 30s window).
 
 ---
 
@@ -464,7 +464,7 @@ shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled
 ## Polling Strategy for the Server
 
 ```
-Every 7 seconds, in parallel:
+Every 15 seconds, in parallel:
   ┌─ Fetch metro/vehicle-positions     (~13 KB)
   ├─ Fetch tram/vehicle-positions      (~20 KB)
   ├─ Fetch bus/vehicle-positions       (~186 KB)

@@ -20,6 +20,8 @@ import type {
 export interface PollResult {
   /** Whether at least one vehicle position feed succeeded */
   hasPositions: boolean;
+  /** Max header timestamp across all vehicle position feeds (POSIX seconds). 0 if no positions. */
+  headerTimestamp: number;
   /** Decoded vehicle positions from all modes */
   vehicles: VehiclePosition[];
   /** Decoded trip updates from all modes */
@@ -52,6 +54,7 @@ export async function poll(): Promise<PollResult> {
   const succeeded: string[] = [];
   const failed: string[] = [];
   let hasPositions = false;
+  let maxHeaderTimestamp = 0;
 
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
@@ -71,6 +74,9 @@ export async function poll(): Promise<PollResult> {
           const decoded = decodeVehiclePositions(result.data, feed.mode);
           vehicles.push(...decoded.vehicles);
           hasPositions = true;
+          if (decoded.headerTimestamp > maxHeaderTimestamp) {
+            maxHeaderTimestamp = decoded.headerTimestamp;
+          }
           log("debug", `Decoded ${decoded.vehicles.length} vehicles from ${label}`);
           break;
         }
@@ -103,6 +109,7 @@ export async function poll(): Promise<PollResult> {
 
   return {
     hasPositions,
+    headerTimestamp: maxHeaderTimestamp,
     vehicles,
     tripUpdates,
     alerts,

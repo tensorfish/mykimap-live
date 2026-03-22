@@ -42,7 +42,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 ### Step 5: Poll loop runs on schedule
 
-**Goal:** The poll cycle repeats every 7 seconds. Consecutive polls that return identical data (feed cache hasn't refreshed) are handled without errors.
+**Goal:** The poll cycle repeats every 15 seconds. Most polls return fresh data (feed caches ~30s, so every second poll has new data). Polls that return identical data are handled without errors.
 
 **Validation:** Let the server run for 60 seconds. Count `Poll complete` log lines — should be ~8–9. Vehicle counts between consecutive polls should not swing more than 10% (vehicles enter/leave service gradually, not in bulk). No errors or uncaught exceptions.
 
@@ -258,7 +258,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** After each `processSnapshot()`, the enriched `VehiclePosition[]` is batch-inserted into the DuckDB `snapshots` table. Recording does not block poll/broadcast.
 
-**Validation:** Run server with recording enabled for 2 minutes. Open the `.duckdb` file with the `duckdb` CLI. `SELECT COUNT(*) FROM snapshots` returns > 0. `SELECT COUNT(DISTINCT timestamp) FROM snapshots` returns ~17 (2 min ÷ 7s). `SELECT DISTINCT mode FROM snapshots` returns `metro`, `tram`, `bus`, `vline`.
+**Validation:** Run server with recording enabled for 2 minutes. Open the `.duckdb` file with the `duckdb` CLI. `SELECT COUNT(*) FROM snapshots` returns > 0. `SELECT COUNT(DISTINCT timestamp) FROM snapshots` returns ~4 (2 min ÷ ~30s feed refresh, duplicates skipped). `SELECT DISTINCT mode FROM snapshots` returns `metro`, `tram`, `bus`, `vline`.
 
 ---
 
