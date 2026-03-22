@@ -9,7 +9,6 @@ export interface Filters {
   tram: boolean;
   bus: boolean;
   vline: boolean;
-  highlightAlerts: boolean;
 }
 
 export interface AppState {
@@ -27,7 +26,7 @@ export const store = new Store<AppState>({
   lastTickAt: 0,
   selectedEntityId: null,
   routeShape: null,
-  filters: { metro: true, tram: true, bus: true, vline: true, highlightAlerts: false },
+  filters: { metro: true, tram: true, bus: true, vline: true },
 });
 
 // ── Derived selectors ──
@@ -61,22 +60,6 @@ export function setFilter(key: keyof Filters, value: boolean): void {
     ...prev,
     filters: { ...prev.filters, [key]: value },
   }));
-}
-
-/** Set of route_ids that have active alerts (cached per tick) */
-let alertRouteIds: Set<string> = new Set();
-
-export function getAlertRouteIds(): Set<string> {
-  return alertRouteIds;
-}
-
-function updateAlertRouteIds(alerts: ServiceAlert[]): void {
-  alertRouteIds = new Set<string>();
-  for (const a of alerts) {
-    for (const e of a.informedEntities) {
-      if (e.routeId) alertRouteIds.add(e.routeId);
-    }
-  }
 }
 
 // ── Actions ──
@@ -132,7 +115,6 @@ export function applyBacklog(
   // Apply each tick to the path queue (via the layers module)
   // The last tick becomes the current worldState for display
   const last = backlog[backlog.length - 1]!;
-  updateAlertRouteIds(alerts);
 
   store.setState((prev) => ({
     ...prev,
@@ -150,7 +132,6 @@ export function applyBacklog(
 }
 
 export function applyTick(worldState: WorldState): void {
-  updateAlertRouteIds(worldState.alerts);
   store.setState((prev) => ({
     ...prev,
     worldState,

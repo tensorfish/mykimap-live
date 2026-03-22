@@ -244,14 +244,11 @@ export interface DisplayVehicle {
   routeId: string;
   vehicleId: string;
   vehicleLabel: string;
-  hasAlert: boolean;
 }
 
 export function computeFrame(
   vehicles: VehiclePosition[],
   dtMs: number,
-  alertRouteIds: Set<string>,
-  highlightAlerts: boolean
 ): DisplayVehicle[] {
   return vehicles.map((v) => {
     const q = queues.get(v.entityId);
@@ -262,7 +259,7 @@ export function computeFrame(
         position: [v.longitude, v.latitude] as [number, number],
         angle: -v.bearing, stale: v.stale, speed: v.speed,
         bearing: v.bearing, routeId: v.routeId,
-        vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel, hasAlert: highlightAlerts && alertRouteIds.has(v.routeId),
+        vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
       };
     }
 
@@ -277,42 +274,20 @@ export function computeFrame(
       angle: bearing !== 0 ? -bearing : -v.bearing,
       stale: v.stale, speed: v.speed,
       bearing: bearing || v.bearing, routeId: v.routeId,
-      vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel, hasAlert: highlightAlerts && alertRouteIds.has(v.routeId),
+      vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
     };
   });
 }
 
 // ── Vehicle arrow layer ──
 
-const ALERT_COLOR: [number, number, number, number] = [240, 173, 78, 200];
-
 export function createVehicleLayer(
   display: DisplayVehicle[],
   selectedId: string | null
-): IconLayer<DisplayVehicle>[] {
+) {
   const hasSelection = selectedId !== null;
 
-  // Alert glow layer — slightly larger yellow arrows behind alerted vehicles
-  const alertedVehicles = display.filter((d) => d.hasAlert);
-  const alertGlow = new IconLayer<DisplayVehicle>({
-    id: "vehicles-alert-glow",
-    data: alertedVehicles,
-    iconAtlas: getArrowIconUrl(),
-    iconMapping: ARROW_ICON_MAPPING,
-    getIcon: () => "arrow",
-    getPosition: (d) => d.position,
-    getColor: ALERT_COLOR,
-    getSize: (d) => MODE_SIZE[d.mode] * 1.6,
-    getAngle: (d) => d.angle,
-    sizeScale: 1,
-    sizeUnits: "pixels" as const,
-    sizeMinPixels: 12,
-    sizeMaxPixels: 50,
-    pickable: false,
-    billboard: false,
-  });
-
-  const main = new IconLayer<DisplayVehicle>({
+  return new IconLayer<DisplayVehicle>({
     id: "vehicles",
     data: display,
     iconAtlas: getArrowIconUrl(),
@@ -336,8 +311,6 @@ export function createVehicleLayer(
     pickable: true,
     billboard: false,
   });
-
-  return [alertGlow, main];
 }
 
 // ── Trail layer ──

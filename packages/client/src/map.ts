@@ -1,7 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition, TransportMode } from "./types.js";
-import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, getAlertRouteIds, selectVehicle } from "./store.js";
+import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, selectVehicle } from "./store.js";
 import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
 
 const INITIAL_VIEW = {
@@ -104,11 +104,9 @@ export function initMap(
       const selectedId = getSelectedEntityId();
       const routeShape = getRouteShape();
       const filters = getFilters();
-      const alertRouteIds = getAlertRouteIds();
 
-      // Filter vehicles by mode
       const filtered = currentVehicles.filter((v) => filters[v.mode]);
-      const display = computeFrame(filtered, dtMs, alertRouteIds, filters.highlightAlerts);
+      const display = computeFrame(filtered, dtMs);
 
       let selectedMode: TransportMode | null = null;
       if (selectedId) {
@@ -120,7 +118,7 @@ export function initMap(
         layers: [
           createRouteShapeLayer(routeShape, selectedMode),
           createTrailLayer(filtered, selectedId),
-          ...createVehicleLayer(display, selectedId),
+          createVehicleLayer(display, selectedId),
         ],
       });
     }
