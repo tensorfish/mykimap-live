@@ -26,24 +26,28 @@ function getArrowIconUrl(): string {
 
 // ── Client-side lerp engine ──
 //
-// Server sends positions every 1s. We lerp between the previous
-// and current server position at 60fps, keyed by entityId.
-// This is immune to array reordering (unlike deck.gl transitions).
+// Server sends shape-interpolated positions every 1s.
+// We lerp from the LAST DISPLAYED position (what the user sees)
+// to the new server position over 1s at 60fps.
+// Keyed by entityId — immune to array reordering.
 
 interface LerpState {
-  prevLon: number;
-  prevLat: number;
-  prevBearing: number;
-  curLon: number;
-  curLat: number;
-  curBearing: number;
-  updatedAt: number; // ms when curXxx was set
+  /** Where the arrow was last rendered (display position) */
+  displayLon: number;
+  displayLat: number;
+  displayBearing: number;
+  /** Where the server says the vehicle should be NOW */
+  targetLon: number;
+  targetLat: number;
+  targetBearing: number;
+  /** When the target was set */
+  updatedAt: number;
 }
 
 const lerpStates = new Map<string, LerpState>();
-const LERP_MS = 1000; // matches server broadcast interval
+const LERP_MS = 1000;
 
-/** Call when new server data arrives. Previous becomes prev, new becomes cur. */
+/** Called when new server tick arrives. Target = new server position. Prev = last display. */
 export function updateLerpTargets(vehicles: VehiclePosition[]): void {
   const now = Date.now();
   const seen = new Set<string>();
@@ -53,19 +57,20 @@ export function updateLerpTargets(vehicles: VehiclePosition[]): void {
     const s = lerpStates.get(v.entityId);
 
     if (s) {
-      // Promote current → previous, set new current
-      s.prevLon = s.curLon;
-      s.prevLat = s.curLat;
-      s.prevBearing = s.curBearing;
-      s.curLon = v.longitude;
-      s.curLat = v.latitude;
-      s.curBearing = v.bearing;
+      // Key fix: prev becomes the LAST DISPLAYED position, not the last server position.
+      // This guarantees the lerp starts from where the arrow actually IS on screen.
+      s.displayLon = s.displayLon; // stays — will be overwritten by computeFrame
+      s.displayLat = s.displayLat;
+      s.displayBearing = s.displayBearing;
+      s.targetLon = v.longitude;
+      s.targetLat = v.latitude;
+      s.targetBearing = v.bearing;
       s.updatedAt = now;
     } else {
-      // First time — no lerp, snap instantly
+      // First time — snap to server position, no lerp
       lerpStates.set(v.entityId, {
-        prevLon: v.longitude, prevLat: v.latitude, prevBearing: v.bearing,
-        curLon: v.longitude, curLat: v.latitude, curBearing: v.bearing,
+        displayLon: v.longitude, displayLat: v.latitude, displayBearing: v.bearing,
+        targetLon: v.longitude, targetLat: v.latitude, targetBearing: v.bearing,
         updatedAt: now,
       });
     }
@@ -90,7 +95,7 @@ export interface DisplayVehicle {
   vehicleLabel: string;
 }
 
-/** Compute interpolated positions for this exact frame. Call every rAF. */
+/** Compute lerped positions for this exact frame. Updates display positions. */
 export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
   const now = Date.now();
 
@@ -98,6 +103,8 @@ export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
     const s = lerpStates.get(v.entityId);
 
     if (!s || v.stale || v.speed < 0.5) {
+      // No lerp — render at server position
+      if (s) { s.displayLon = v.longitude; s.displayLat = v.latitude; s.displayBearing = v.bearing; }
       return {
         entityId: v.entityId, mode: v.mode,
         position: [v.longitude, v.latitude] as [number, number],
@@ -110,17 +117,25 @@ export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
     const elapsed = now - s.updatedAt;
     const t = Math.min(elapsed / LERP_MS, 1);
 
-    // Lerp position
-    const lon = s.prevLon + t * (s.curLon - s.prevLon);
-    const lat = s.prevLat + t * (s.curLat - s.prevLat);
+    // Lerp from last display position to server target
+    const lon = s.displayLon + t * (s.targetLon - s.displayLon);
+    const lat = s.displayLat + t * (s.targetLat - s.displayLat);
 
     // Lerp bearing with wraparound
-    let fromB = -s.prevBearing;
-    let toB = -s.curBearing;
+    let fromB = -s.displayBearing;
+    let toB = -s.targetBearing;
     let diff = toB - fromB;
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
     const angle = fromB + t * diff;
+
+    // Update the display position for the NEXT tick's lerp start
+    // (only at t=1, so the display snaps to target at the end)
+    if (t >= 1) {
+      s.displayLon = s.targetLon;
+      s.displayLat = s.targetLat;
+      s.displayBearing = s.targetBearing;
+    }
 
     return {
       entityId: v.entityId, mode: v.mode,
@@ -163,9 +178,6 @@ export function createVehicleLayer(
     sizeMaxPixels: 40,
     pickable: true,
     billboard: false,
-    // NO transitions — we lerp manually by entityId above.
-    // deck.gl transitions match by array index and splatter
-    // when vehicles enter/leave the array.
   });
 }
 

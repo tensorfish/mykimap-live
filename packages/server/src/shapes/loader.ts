@@ -19,8 +19,8 @@ const MODE_FOLDERS: Record<TransportMode, string[]> = {
 /** trip_id → shape_id */
 const tripToShape = new Map<string, string>();
 
-/** route_id → shape_id (first shape found for this route — fallback for unmatched trip_ids) */
-const routeToShape = new Map<string, string>();
+/** route_id → Map<direction_id, shape_id> — both directions per route */
+const routeToShapes = new Map<string, Map<string, string>>();
 
 /** shape_id → polyline with cumulative distances */
 const shapeIndex = new Map<string, ShapePolyline>();
@@ -32,14 +32,23 @@ export function getShapeForTrip(tripId: string): ShapePolyline | undefined {
 }
 
 /**
- * Fallback: get any shape for a route_id.
- * Used when trip_id doesn't match the static schedule (e.g. trams
- * where the schedule version segment in the trip_id changes frequently).
+ * Get both direction shapes for a route_id.
+ * Returns up to two shapes — dir0 (direction_id "0") and dir1 (direction_id "1").
+ * Used when trip_id doesn't match the static schedule (all trams, some buses).
  */
+export function getShapesForRoute(routeId: string): { dir0?: ShapePolyline; dir1?: ShapePolyline } {
+  const dirMap = routeToShapes.get(routeId);
+  if (!dirMap) return {};
+  return {
+    dir0: dirMap.has("0") ? shapeIndex.get(dirMap.get("0")!) : undefined,
+    dir1: dirMap.has("1") ? shapeIndex.get(dirMap.get("1")!) : undefined,
+  };
+}
+
+/** Compat: get any shape for a route (picks dir0 first, then dir1) */
 export function getShapeForRoute(routeId: string): ShapePolyline | undefined {
-  const shapeId = routeToShape.get(routeId);
-  if (shapeId) return shapeIndex.get(shapeId);
-  return undefined;
+  const { dir0, dir1 } = getShapesForRoute(routeId);
+  return dir0 ?? dir1;
 }
 
 export function getShapeById(shapeId: string): ShapePolyline | undefined {
@@ -47,7 +56,7 @@ export function getShapeById(shapeId: string): ShapePolyline | undefined {
 }
 
 export function shapeStats() {
-  return { trips: tripToShape.size, shapes: shapeIndex.size, routes: routeToShape.size };
+  return { trips: tripToShape.size, shapes: shapeIndex.size, routes: routeToShapes.size };
 }
 
 /**
@@ -152,6 +161,7 @@ async function extractAndParse(
   const tripIdCol = tripsHeader.indexOf("trip_id");
   const shapeIdCol = tripsHeader.indexOf("shape_id");
   const routeIdCol = tripsHeader.indexOf("route_id");
+  const dirIdCol = tripsHeader.indexOf("direction_id");
 
   if (tripIdCol === -1 || shapeIdCol === -1) {
     log("warn", `trips.txt for folder ${folder} missing columns (got: ${tripsHeader.join(",")}), skipping`);
@@ -165,11 +175,18 @@ async function extractAndParse(
     const tripId = clean(cols[tripIdCol]);
     const shapeId = clean(cols[shapeIdCol]);
     const routeId = routeIdCol !== -1 ? clean(cols[routeIdCol]) : "";
+    const dirId = dirIdCol !== -1 ? clean(cols[dirIdCol]) : "0";
     if (tripId && shapeId) {
       tripToShape.set(tripId, shapeId);
-      // Store first shape per route as fallback (for trams whose trip_ids don't match)
-      if (routeId && !routeToShape.has(routeId)) {
-        routeToShape.set(routeId, shapeId);
+      // Store shape per route + direction (both directions for fallback matching)
+      if (routeId) {
+        if (!routeToShapes.has(routeId)) {
+          routeToShapes.set(routeId, new Map());
+        }
+        const dirMap = routeToShapes.get(routeId)!;
+        if (!dirMap.has(dirId)) {
+          dirMap.set(dirId, shapeId);
+        }
       }
     }
   }
