@@ -31,6 +31,10 @@ function getArrowIconUrl(): string {
 // this queue at constant speed. As new ticks arrive, their path
 // segments are appended to the end. The animation never breaks.
 
+const TRAIL_MAX: Record<TransportMode, number> = {
+  metro: 30, vline: 30, tram: 60, bus: 80,
+};
+
 interface VehicleQueue {
   /** All waypoints concatenated, in order */
   points: Array<[number, number]>;
@@ -48,6 +52,9 @@ interface VehicleQueue {
   bearing: number;
   /** Previous bearing for smooth rotation */
   prevBearing: number;
+  /** Client-side trail: positions the playhead has already passed */
+  trail: Array<[number, number]>;
+  mode: TransportMode;
 }
 
 const queues = new Map<string, VehicleQueue>();
@@ -122,7 +129,6 @@ export function feedTick(vehicles: VehiclePosition[]): void {
     let q = queues.get(v.entityId);
 
     if (!q) {
-      // New vehicle — create queue starting at current position
       q = {
         points: [[v.longitude, v.latitude]],
         dists: [0],
@@ -132,6 +138,8 @@ export function feedTick(vehicles: VehiclePosition[]): void {
         lastAppendAt: now,
         bearing: v.bearing,
         prevBearing: v.bearing,
+        trail: [],
+        mode: v.mode,
       };
       queues.set(v.entityId, q);
     }
@@ -190,7 +198,6 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
     }
 
     // Advance playhead along the queue at the vehicle's speed
-    // Only advance if there's path ahead (don't overshoot)
     const ahead = q.totalDist - q.playhead;
     if (ahead > 0) {
       q.playhead += q.speed * dtMs;
@@ -199,6 +206,14 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
 
     const pos = sampleQueue(q);
     trimQueue(q);
+
+    // Append to client-side trail (only positions the arrow has passed)
+    const lastTrail = q.trail[q.trail.length - 1];
+    if (!lastTrail || Math.abs(lastTrail[0] - pos[0]) > 1e-7 || Math.abs(lastTrail[1] - pos[1]) > 1e-7) {
+      q.trail.push(pos);
+      const max = TRAIL_MAX[q.mode];
+      if (q.trail.length > max) q.trail.splice(0, q.trail.length - max);
+    }
 
     return {
       entityId: v.entityId, mode: v.mode,
@@ -245,6 +260,8 @@ export function createVehicleLayer(
 }
 
 // ── Trail layer ──
+// Trail is built client-side from positions the playhead has already
+// passed through. This guarantees the trail is always BEHIND the arrow.
 
 interface TrailData {
   entityId: string;
@@ -258,21 +275,16 @@ const TRAIL_WIDTH: Record<TransportMode, number> = {
 
 export function createTrailLayer(
   vehicles: VehiclePosition[],
-  trails: Record<string, Array<[number, number]>>,
   selectedId: string | null
 ) {
-  const modeMap = new Map<string, TransportMode>();
-  for (const v of vehicles) modeMap.set(v.entityId, v.mode);
-
   const hasSelection = selectedId !== null;
   const data: TrailData[] = [];
 
-  for (const [entityId, path] of Object.entries(trails)) {
-    if (path.length < 2) continue;
-    const mode = modeMap.get(entityId);
-    if (!mode) continue;
-    if (hasSelection && entityId !== selectedId) continue;
-    data.push({ entityId, path, mode });
+  for (const v of vehicles) {
+    const q = queues.get(v.entityId);
+    if (!q || q.trail.length < 2) continue;
+    if (hasSelection && v.entityId !== selectedId) continue;
+    data.push({ entityId: v.entityId, path: q.trail, mode: v.mode });
   }
 
   return new PathLayer<TrailData>({

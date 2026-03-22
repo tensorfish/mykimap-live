@@ -1,7 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition, TransportMode } from "./types.js";
-import { store, getVehicles, getTrails, getSelectedEntityId, getRouteShape, selectVehicle } from "./store.js";
+import { store, getVehicles, getSelectedEntityId, getRouteShape, selectVehicle } from "./store.js";
 import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
 
 const INITIAL_VIEW = {
@@ -75,23 +75,18 @@ export function initMap(
   // ── Data flow ──
 
   let currentVehicles: VehiclePosition[] = [];
-  let currentTrails: Record<string, Array<[number, number]>> = {};
 
   // Handle initial backlog from server
   window.addEventListener("vehicle-backlog", ((e: CustomEvent) => {
-    const { backlog } = e.detail;
-    feedBacklog(backlog);
+    feedBacklog(e.detail.backlog);
   }) as EventListener);
 
   // Handle regular ticks
   store.subscribe(() => {
     const vehicles = getVehicles();
-    const trails = getTrails();
     if (vehicles.length === 0) return;
-
     feedTick(vehicles);
     currentVehicles = vehicles;
-    currentTrails = trails;
   });
 
   // ── 60fps render loop ──
@@ -120,7 +115,7 @@ export function initMap(
       deck.setProps({
         layers: [
           createRouteShapeLayer(routeShape, selectedMode),
-          createTrailLayer(currentVehicles, currentTrails, selectedId),
+          createTrailLayer(currentVehicles, selectedId),
           createVehicleLayer(display, selectedId),
         ],
       });
