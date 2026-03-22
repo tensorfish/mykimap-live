@@ -44,7 +44,8 @@ const vehicleStates = new Map<string, VehicleState>();
 
 // ── Server-side trail history ──
 
-const MAX_TRAIL_POINTS = 50;
+/** ~15 seconds of trail at 1 tick/s — enough to show direction, not the whole journey */
+const MAX_TRAIL_POINTS = 15;
 
 /** Per-vehicle trail: entityId → array of [lon, lat] (most recent last) */
 const vehicleTrails = new Map<string, Array<[number, number]>>();
