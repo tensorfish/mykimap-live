@@ -33,40 +33,110 @@ function getArrowIconUrl(): string {
   return arrowIconUrl;
 }
 
+// ── Client-side interpolation state ──
+// We do NOT use deck.gl transitions (they match by array index and
+// splatter when vehicles enter/leave the array). Instead we lerp
+// manually using a previous position map keyed by entityId.
+
+interface PrevState {
+  lon: number;
+  lat: number;
+  bearing: number;
+  timestamp: number; // when this state was set (Date.now())
+}
+
+const prevPositions = new Map<string, PrevState>();
+const LERP_DURATION = 1000; // ms — matches server broadcast interval
+
+/**
+ * Call this from the store subscriber BEFORE creating layers.
+ * Captures the current positions as the "previous" state for the next tick.
+ */
+export function snapshotPositions(vehicles: VehiclePosition[]): void {
+  const now = Date.now();
+  const seen = new Set<string>();
+
+  for (const v of vehicles) {
+    seen.add(v.entityId);
+
+    const prev = prevPositions.get(v.entityId);
+    if (prev) {
+      // Update: the old "current" becomes the new "previous"
+      // Only update if the position actually changed
+      if (prev.lon !== v.longitude || prev.lat !== v.latitude) {
+        prev.lon = v.longitude;
+        prev.lat = v.latitude;
+        prev.bearing = v.bearing;
+        prev.timestamp = now;
+      }
+    } else {
+      // New vehicle — no lerp, just snap
+      prevPositions.set(v.entityId, {
+        lon: v.longitude,
+        lat: v.latitude,
+        bearing: v.bearing,
+        timestamp: now,
+      });
+    }
+  }
+
+  // Remove departed vehicles
+  for (const id of prevPositions.keys()) {
+    if (!seen.has(id)) prevPositions.delete(id);
+  }
+}
+
 // ── Vehicle arrow layer ──
-// No deck.gl transitions — the server interpolates at 1s ticks,
-// positions change smoothly tick-to-tick. Adding transitions on top
-// caused "splattering" because deck.gl matches by array index,
-// not by entityId, so reordered arrays animate to wrong positions.
 
 export function createVehicleLayer(vehicles: VehiclePosition[]) {
+  const now = Date.now();
+
   return new IconLayer<VehiclePosition>({
     id: "vehicles",
     data: vehicles,
     iconAtlas: getArrowIconUrl(),
     iconMapping: ARROW_ICON_MAPPING,
     getIcon: () => "arrow",
-    getPosition: (d) => [d.longitude, d.latitude],
+    getPosition: (d) => {
+      const prev = prevPositions.get(d.entityId);
+      if (!prev) return [d.longitude, d.latitude];
+
+      const elapsed = now - prev.timestamp;
+      if (elapsed >= LERP_DURATION) return [d.longitude, d.latitude];
+
+      // Lerp from previous position to current
+      const t = elapsed / LERP_DURATION;
+      return [
+        prev.lon + t * (d.longitude - prev.lon),
+        prev.lat + t * (d.latitude - prev.lat),
+      ];
+    },
     getColor: (d) =>
       d.stale ? [...STALE_COLOR, 160] : [...MODE_COLORS[d.mode], 230],
     getSize: (d) => MODE_SIZE[d.mode],
-    // Icon drawn pointing up (north). deck.gl getAngle rotates CCW.
-    // Bearing is CW from north. So getAngle = -bearing.
-    getAngle: (d) => -d.bearing,
+    getAngle: (d) => {
+      const prev = prevPositions.get(d.entityId);
+      if (!prev) return -d.bearing;
+
+      const elapsed = now - prev.timestamp;
+      if (elapsed >= LERP_DURATION) return -d.bearing;
+
+      // Lerp bearing (handle wraparound)
+      const t = elapsed / LERP_DURATION;
+      let from = -prev.bearing;
+      let to = -d.bearing;
+      let diff = to - from;
+      if (diff > 180) diff -= 360;
+      if (diff < -180) diff += 360;
+      return from + t * diff;
+    },
     sizeScale: 1,
     sizeUnits: "pixels" as const,
     sizeMinPixels: 8,
     sizeMaxPixels: 40,
     pickable: true,
     billboard: false,
-
-    // Smooth animation between 1s server ticks.
-    // Server sorts vehicles by entityId so array order is stable —
-    // deck.gl index-based matching works correctly.
-    transitions: {
-      getPosition: { duration: 1000, easing: (t: number) => t },
-      getAngle: { duration: 1000, easing: (t: number) => t },
-    },
+    // No deck.gl transitions — we lerp manually above with entityId keys
   });
 }
 
@@ -85,15 +155,10 @@ const TRAIL_WIDTH: Record<TransportMode, number> = {
   vline: 3,
 };
 
-/**
- * Build trail layer from server-provided trails.
- * Trails arrive as a Record<entityId, [lon,lat][]> from the server.
- */
 export function createTrailLayer(
   vehicles: VehiclePosition[],
   trails: Record<string, Array<[number, number]>>
 ) {
-  // Build a mode lookup from vehicles
   const modeMap = new Map<string, TransportMode>();
   for (const v of vehicles) {
     modeMap.set(v.entityId, v.mode);

@@ -1,7 +1,8 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
+import type { VehiclePosition } from "./types.js";
 import { store, getVehicles, getTrails } from "./store.js";
-import { createVehicleLayer, createTrailLayer } from "./layers.js";
+import { createVehicleLayer, createTrailLayer, snapshotPositions } from "./layers.js";
 
 // Melbourne CBD
 const INITIAL_VIEW = {
@@ -86,17 +87,40 @@ export function initMap(
 
   map.on("move", syncViewState);
 
-  // Subscribe to store — update layers when vehicles change
-  store.subscribe(() => {
+  // ── Render loop ──
+  // On each new WS tick: snapshot previous positions, then start a
+  // requestAnimationFrame loop that lerps arrows from old → new over 1s.
+  // This gives smooth 60fps movement keyed by entityId, not array index.
+
+  let currentVehicles: VehiclePosition[] = [];
+  let currentTrails: Record<string, Array<[number, number]>> = {};
+  let animFrameId: number | null = null;
+
+  function renderFrame() {
     if (!deck) return;
-    const vehicles = getVehicles();
-    const trails = getTrails();
     deck.setProps({
       layers: [
-        createTrailLayer(vehicles, trails),
-        createVehicleLayer(vehicles),
+        createTrailLayer(currentVehicles, currentTrails),
+        createVehicleLayer(currentVehicles),
       ],
     });
+    animFrameId = requestAnimationFrame(renderFrame);
+  }
+
+  store.subscribe(() => {
+    const vehicles = getVehicles();
+    const trails = getTrails();
+    if (vehicles.length === 0) return;
+
+    // Snapshot old positions before updating — lerp uses these
+    snapshotPositions(vehicles);
+    currentVehicles = vehicles;
+    currentTrails = trails;
+
+    // Start render loop if not already running
+    if (!animFrameId) {
+      animFrameId = requestAnimationFrame(renderFrame);
+    }
   });
 
   // Map ready — fire callback exactly once
