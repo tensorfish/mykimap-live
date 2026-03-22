@@ -250,7 +250,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** When `RECORDING_ENABLED=true`, the server creates a DuckDB instance and a `snapshots` table in `.data/snapshots/YYYY-MM-DD.duckdb` on boot. When disabled, no DuckDB instance is created.
 
-**Validation:** Set `RECORDING_ENABLED=true`, start server. `.data/snapshots/YYYY-MM-DD.duckdb` file exists. Server logs confirming DuckDB initialized. Set `RECORDING_ENABLED=false`, restart — no `.duckdb` file created, no DuckDB-related logs.
+**Validation:** Set `RECORDING_ENABLED=true`, start server. `.data/snapshots/YYYY-MM-DD.duckdb` file exists where `YYYY-MM-DD` is today's date in `Australia/Melbourne` time (not the server's local timezone). Server logs confirming DuckDB initialized. Set `RECORDING_ENABLED=false`, restart — no `.duckdb` file created, no DuckDB-related logs.
 
 ---
 

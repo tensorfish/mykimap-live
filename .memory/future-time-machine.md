@@ -45,7 +45,9 @@ pollCycle()
 **DuckDB server-side details:**
 
 - **Library:** `duckdb` (Node-API bindings, works with Bun)
-- **Storage:** `.data/snapshots/YYYY-MM-DD.duckdb` — one file per day
+- **Storage:** `.data/snapshots/YYYY-MM-DD.duckdb` — one file per day, where `YYYY-MM-DD` is the date in **`Australia/Melbourne`** timezone (not the server's local time, not UTC). This matches how PTV operates — their schedules, service days, and timetables all use Melbourne time.
+- **Date derivation:** `new Date().toLocaleDateString('en-CA', { timeZone: 'Australia/Melbourne' })` → `"2026-03-22"`. The `en-CA` locale gives `YYYY-MM-DD` format.
+- **Day boundary:** Midnight Melbourne time. A poll at 23:59 AEST goes into today's file; a poll at 00:01 AEST goes into tomorrow's.
 - **Table schema:**
 
 ```sql
@@ -125,6 +127,8 @@ RECORDING_ENABLED=false
 RECORDING_RETENTION_DAYS=30
 RECORDING_DATA_DIR=.data/snapshots
 ```
+
+**Timezone is not configurable.** It is hardcoded to `Australia/Melbourne`. This is a Melbourne transport map — the file dates must match PTV's service day boundaries, which are defined in Melbourne time. A server running in UTC, US-East, or anywhere else still names files by Melbourne date.
 
 ---
 

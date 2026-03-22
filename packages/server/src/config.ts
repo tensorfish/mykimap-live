@@ -46,6 +46,13 @@ export const config = {
   /** Max retries for the initial poll before going FATAL */
   firstPollMaxRetries: 3,
 
+  /**
+   * All date-based file naming uses Melbourne time, not server-local time.
+   * PTV schedules and service days are defined in this timezone.
+   * Not configurable — this is a Melbourne transport map.
+   */
+  timezone: "Australia/Melbourne" as const,
+
   /** GTFS Schedule (static) — used for route shapes */
   gtfsScheduleUrl: optionalEnv(
     "GTFS_SCHEDULE_URL",
