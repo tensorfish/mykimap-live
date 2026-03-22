@@ -50,10 +50,12 @@ export function createVehicleLayer(vehicles: VehiclePosition[]) {
     getColor: (d) =>
       d.stale ? [...STALE_COLOR, 160] : [...MODE_COLORS[d.mode], 230],
     getSize: (d) => MODE_SIZE[d.mode],
-    // deck.gl getAngle: 0°=east, positive=counter-clockwise
-    // Bearing: 0°=north, positive=clockwise
-    // Conversion: angle = 90 - bearing
-    getAngle: (d) => 90 - d.bearing,
+    // Icon drawn pointing up (north). deck.gl getAngle rotates CCW.
+    // Bearing is CW from north. So getAngle = -bearing.
+    // Bearing 0° (north) → angle 0° (no rotation, stays up) ✓
+    // Bearing 90° (east) → angle -90° (90° CW, points right) ✓
+    // Bearing 180° (south) → angle -180° (points down) ✓
+    getAngle: (d) => -d.bearing,
     sizeScale: 1,
     sizeUnits: "pixels" as const,
     sizeMinPixels: 8,
