@@ -190,7 +190,7 @@ function startServer(): void {
     port: config.port,
     hostname: config.host,
 
-    fetch(req, server) {
+    async fetch(req, server) {
       const url = new URL(req.url);
 
       // WebSocket upgrade
@@ -211,6 +211,14 @@ function startServer(): void {
           clients: clientCount(),
           lastPoll: lastPollTimestamp,
         });
+      }
+
+      // Serve client static files in production
+      const clientDist = new URL("../../client/dist", import.meta.url).pathname;
+      let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
+      const file = Bun.file(clientDist + filePath);
+      if (await file.exists()) {
+        return new Response(file);
       }
 
       return new Response("Not found", { status: 404 });
