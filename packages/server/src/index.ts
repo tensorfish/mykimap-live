@@ -2,7 +2,7 @@ import { config } from "./config.js";
 import { ServerStateMachine } from "./state-machine.js";
 import { loadProtoSchema } from "./poller/decoder.js";
 import { poll } from "./poller/index.js";
-import { processSnapshot, interpolate, getTrails } from "./interpolation/index.js";
+import { processSnapshot, cleanupTrails, getTrails } from "./interpolation/index.js";
 import { addClient, removeClient, broadcast, clientCount } from "./broadcast/index.js";
 import { loadShapes, shapeStats, getShapeForTrip, getShapeForRoute } from "./shapes/index.js";
 import { log } from "./logger.js";
@@ -167,17 +167,20 @@ function broadcastCycle(): void {
   if (clientCount() === 0) return;
 
   const now = Date.now();
-  const deltaMs = now - lastBroadcastTime;
   lastBroadcastTime = now;
 
-  // Interpolate positions forward, sort by entityId for stable array order
-  // (deck.gl transitions match by index — unstable order causes splatter)
-  const interpolated = interpolate(currentVehicles, deltaMs)
+  // Clean up trails for departed vehicles
+  cleanupTrails(currentVehicles);
+
+  // Send snapped positions + speed + bearing as anchor data.
+  // Client does all visual projection at 60fps.
+  const sorted = currentVehicles
+    .slice()
     .sort((a, b) => (a.entityId < b.entityId ? -1 : a.entityId > b.entityId ? 1 : 0));
 
   const state: WorldState = {
     timestamp: Math.floor(now / 1000),
-    vehicles: interpolated,
+    vehicles: sorted,
     trails: getTrails(),
     alerts: currentAlerts,
     serverState: sm.state,
