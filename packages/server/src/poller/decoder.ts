@@ -70,6 +70,7 @@ export function decodeVehiclePositions(
       stale: false, // Calculated later based on age
       shapeDistTraveled: -1, // Set during processSnapshot if shape is matched
       shapeId: "", // Set during processSnapshot
+      pathSegment: [], // Set during interpolate
     });
   }
 

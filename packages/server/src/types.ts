@@ -49,6 +49,13 @@ export interface VehiclePosition {
   shapeDistTraveled: number;
   /** The shape_id this vehicle is snapped to. Empty if unmatched. */
   shapeId: string;
+  /**
+   * Path segment for this tick: multiple [lon, lat] points sampled along the
+   * route shape between the previous and current interpolated position.
+   * The client walks along this path at 60fps instead of straight-line lerping.
+   * Empty array if no shape matched or vehicle is stationary.
+   */
+  pathSegment: Array<[number, number]>;
 }
 
 // ── Route shapes ──

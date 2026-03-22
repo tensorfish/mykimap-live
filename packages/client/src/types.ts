@@ -30,6 +30,8 @@ export interface VehiclePosition {
   stale: boolean;
   shapeDistTraveled: number;
   shapeId: string;
+  /** Route geometry between prev and current tick position: [lon, lat][] */
+  pathSegment: Array<[number, number]>;
 }
 
 export interface ServiceAlert {

@@ -32,22 +32,63 @@ function getArrowIconUrl(): string {
 // Keyed by entityId — immune to array reordering.
 
 interface LerpState {
-  /** Where the arrow was last rendered (display position) */
+  /** Where the arrow was last rendered */
   displayLon: number;
   displayLat: number;
   displayBearing: number;
-  /** Where the server says the vehicle should be NOW */
+  /** Path segment from server: route geometry between prev and current tick */
+  path: Array<[number, number]>;
+  /** Cumulative distances along the path for even-speed traversal */
+  pathDists: number[];
+  pathTotalDist: number;
+  /** Target position + bearing (end of path) */
   targetLon: number;
   targetLat: number;
   targetBearing: number;
-  /** When the target was set */
+  /** When this tick was received */
   updatedAt: number;
 }
 
 const lerpStates = new Map<string, LerpState>();
 const LERP_MS = 1000;
 
-/** Called when new server tick arrives. Target = new server position. Prev = last display. */
+/** Compute cumulative distances for a path */
+function computePathDists(path: Array<[number, number]>): { dists: number[]; total: number } {
+  const dists = [0];
+  let total = 0;
+  for (let i = 1; i < path.length; i++) {
+    const dlat = path[i]![1] - path[i - 1]![1];
+    const dlon = path[i]![0] - path[i - 1]![0];
+    // Approximate distance in degrees → good enough for lerp pacing
+    total += Math.sqrt(dlat * dlat + dlon * dlon);
+    dists.push(total);
+  }
+  return { dists, total };
+}
+
+/** Sample a position along a path at a given fraction (0–1) */
+function samplePath(path: Array<[number, number]>, dists: number[], totalDist: number, t: number): [number, number] {
+  if (path.length === 0) return [0, 0];
+  if (path.length === 1 || totalDist === 0) return path[0]!;
+
+  const targetDist = t * totalDist;
+
+  // Find segment
+  for (let i = 0; i < path.length - 1; i++) {
+    if (targetDist >= dists[i]! && targetDist <= dists[i + 1]!) {
+      const segLen = dists[i + 1]! - dists[i]!;
+      const segT = segLen > 0 ? (targetDist - dists[i]!) / segLen : 0;
+      return [
+        path[i]![0] + segT * (path[i + 1]![0] - path[i]![0]),
+        path[i]![1] + segT * (path[i + 1]![1] - path[i]![1]),
+      ];
+    }
+  }
+
+  return path[path.length - 1]!;
+}
+
+/** Called when new server tick arrives */
 export function updateLerpTargets(vehicles: VehiclePosition[]): void {
   const now = Date.now();
   const seen = new Set<string>();
@@ -56,20 +97,31 @@ export function updateLerpTargets(vehicles: VehiclePosition[]): void {
     seen.add(v.entityId);
     const s = lerpStates.get(v.entityId);
 
+    // Build path: if server sent a path segment, use it.
+    // Otherwise fall back to a 2-point straight line.
+    let path = v.pathSegment && v.pathSegment.length >= 2
+      ? v.pathSegment
+      : undefined;
+
     if (s) {
-      // Key fix: prev becomes the LAST DISPLAYED position, not the last server position.
-      // This guarantees the lerp starts from where the arrow actually IS on screen.
-      s.displayLon = s.displayLon; // stays — will be overwritten by computeFrame
-      s.displayLat = s.displayLat;
-      s.displayBearing = s.displayBearing;
+      if (!path) {
+        // No path segment — straight line from display to target
+        path = [[s.displayLon, s.displayLat], [v.longitude, v.latitude]];
+      }
+      const { dists, total } = computePathDists(path);
+      s.path = path;
+      s.pathDists = dists;
+      s.pathTotalDist = total;
       s.targetLon = v.longitude;
       s.targetLat = v.latitude;
       s.targetBearing = v.bearing;
       s.updatedAt = now;
     } else {
-      // First time — snap to server position, no lerp
+      // First time — snap
+      const p: Array<[number, number]> = [[v.longitude, v.latitude]];
       lerpStates.set(v.entityId, {
         displayLon: v.longitude, displayLat: v.latitude, displayBearing: v.bearing,
+        path: p, pathDists: [0], pathTotalDist: 0,
         targetLon: v.longitude, targetLat: v.latitude, targetBearing: v.bearing,
         updatedAt: now,
       });
@@ -95,7 +147,7 @@ export interface DisplayVehicle {
   vehicleLabel: string;
 }
 
-/** Compute lerped positions for this exact frame. Updates display positions. */
+/** Compute positions for this exact frame by walking along path segments. */
 export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
   const now = Date.now();
 
@@ -103,7 +155,6 @@ export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
     const s = lerpStates.get(v.entityId);
 
     if (!s || v.stale || v.speed < 0.5) {
-      // No lerp — render at server position
       if (s) { s.displayLon = v.longitude; s.displayLat = v.latitude; s.displayBearing = v.bearing; }
       return {
         entityId: v.entityId, mode: v.mode,
@@ -117,9 +168,15 @@ export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
     const elapsed = now - s.updatedAt;
     const t = Math.min(elapsed / LERP_MS, 1);
 
-    // Lerp from last display position to server target
-    const lon = s.displayLon + t * (s.targetLon - s.displayLon);
-    const lat = s.displayLat + t * (s.targetLat - s.displayLat);
+    // Walk along the path segment (actual route geometry)
+    let lon: number, lat: number;
+    if (s.path.length >= 2 && s.pathTotalDist > 0) {
+      [lon, lat] = samplePath(s.path, s.pathDists, s.pathTotalDist, t);
+    } else {
+      // No path — hold position
+      lon = s.displayLon;
+      lat = s.displayLat;
+    }
 
     // Lerp bearing with wraparound
     let fromB = -s.displayBearing;
@@ -129,8 +186,7 @@ export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
     if (diff < -180) diff += 360;
     const angle = fromB + t * diff;
 
-    // Update the display position for the NEXT tick's lerp start
-    // (only at t=1, so the display snaps to target at the end)
+    // At t=1, snap display to target for the next tick's path start
     if (t >= 1) {
       s.displayLon = s.targetLon;
       s.displayLat = s.targetLat;

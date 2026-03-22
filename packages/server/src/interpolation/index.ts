@@ -6,6 +6,7 @@ import {
   getShapesForRoute,
   snapToShape,
   sampleShape,
+  sampleShapeSegment,
   shapeLength,
 } from "../shapes/index.js";
 
@@ -170,11 +171,16 @@ export function processSnapshot(
   return vehicles;
 }
 
+// ── Per-vehicle last broadcast distance (for path segment generation) ──
+
+const lastBroadcastDist = new Map<string, number>();
+
 // ── Interpolate for broadcast (30s delayed playback) ──
 //
 // Finds two snapshots straddling (now - 30s), lerps between them.
 // Every position is between two known ground-truth points.
-// Zero prediction. Zero overshoot. Zero snap-back.
+// Generates a pathSegment per vehicle: the actual route geometry
+// between the previous and current broadcast positions.
 
 export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
   if (snapshotBuffer.length === 0) return vehicles;
@@ -197,7 +203,7 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
   // Not enough buffer yet — serve latest snapshot directly (warmup period)
   if (!snapA || !snapB) {
     const latest = snapshotBuffer[snapshotBuffer.length - 1]!;
-    return [...latest.vehicles.values()].sort((a, b) =>
+    return [...latest.vehicles.values()].map(v => ({ ...v, pathSegment: [] })).sort((a, b) =>
       a.entityId < b.entityId ? -1 : a.entityId > b.entityId ? 1 : 0
     );
   }
@@ -209,11 +215,16 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
   const result: VehiclePosition[] = [];
 
   // Interpolate each vehicle that exists in both snapshots
+  // Clean departed vehicles from tracking
+  const activeIds = new Set(snapB.vehicles.keys());
+  for (const key of lastBroadcastDist.keys()) {
+    if (!activeIds.has(key)) lastBroadcastDist.delete(key);
+  }
+
   for (const [entityId, vB] of snapB.vehicles) {
     const vA = snapA.vehicles.get(entityId);
     if (!vA) {
-      // Vehicle appeared in B but not in A — show at B's position
-      result.push({ ...vB });
+      result.push({ ...vB, pathSegment: [] });
       continue;
     }
 
@@ -232,9 +243,16 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
         const bearing = bearingAtDist(shape, clampedDist, direction);
         const speed = span > 0 ? Math.abs(distB - distA) / span : 0;
 
-        // Trail: append from shape-interpolated position.
-        // These are lerps between two known ground-truth points ON the shape,
-        // not predictions — so the trail follows the actual route geometry.
+        // Generate path segment: all shape vertices between last broadcast
+        // position and current position. This gives the client the actual
+        // route geometry to walk along at 60fps — every curve and turn.
+        const prevDist = lastBroadcastDist.get(entityId) ?? clampedDist;
+        const pathSegment = (!vB.stale && speed >= 0.5)
+          ? sampleShapeSegment(shape, prevDist, clampedDist)
+          : [];
+        lastBroadcastDist.set(entityId, clampedDist);
+
+        // Trail from shape-interpolated positions (on-route)
         if (!vB.stale && speed >= 0.5) {
           appendTrail(entityId, pos.lon, pos.lat, vB.mode);
         }
@@ -247,6 +265,7 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
           speed,
           shapeDistTraveled: clampedDist,
           stale: vB.stale,
+          pathSegment,
         });
         continue;
       }
@@ -264,6 +283,7 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
       longitude: lon,
       bearing: vB.bearing,
       speed: vB.speed,
+      pathSegment: [], // No shape — client will straight-line lerp
     });
   }
 

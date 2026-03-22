@@ -92,6 +92,52 @@ export function sampleShape(
 }
 
 /**
+ * Sample multiple points along a shape between two distances.
+ * Returns all shape vertices between distA and distB, plus
+ * interpolated start and end points. This gives the actual
+ * route geometry — every curve and turn — not a straight line.
+ */
+export function sampleShapeSegment(
+  shape: ShapePolyline,
+  distA: number,
+  distB: number
+): Array<[number, number]> {
+  if (shape.length < 2) return [];
+
+  const forward = distB >= distA;
+  const lo = forward ? distA : distB;
+  const hi = forward ? distB : distA;
+  const total = shape[shape.length - 1]!.dist;
+
+  const cLo = Math.max(0, Math.min(lo, total));
+  const cHi = Math.max(0, Math.min(hi, total));
+
+  if (Math.abs(cHi - cLo) < 0.1) return []; // no movement
+
+  const points: Array<[number, number]> = [];
+
+  // Start: interpolated point at cLo
+  const startPos = sampleShape(shape, cLo);
+  if (startPos) points.push([startPos.lon, startPos.lat]);
+
+  // All shape vertices between cLo and cHi (the actual curves)
+  for (const pt of shape) {
+    if (pt.dist > cLo && pt.dist < cHi) {
+      points.push([pt.lon, pt.lat]);
+    }
+  }
+
+  // End: interpolated point at cHi
+  const endPos = sampleShape(shape, cHi);
+  if (endPos) points.push([endPos.lon, endPos.lat]);
+
+  // If traveling in reverse, flip the path
+  if (!forward) points.reverse();
+
+  return points;
+}
+
+/**
  * Get the total length of a shape in meters.
  */
 export function shapeLength(shape: ShapePolyline): number {
