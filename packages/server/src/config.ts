@@ -55,7 +55,7 @@ export const config = {
   timezone: "Australia/Melbourne" as const,
 
   /** Recording — DuckDB snapshot storage */
-  recordingEnabled: optionalEnv("RECORDING_ENABLED", "false") === "true",
+  recordingEnabled: optionalEnv("RECORDING_ENABLED", "true") === "true",
   recordingDataDir: optionalEnv("RECORDING_DATA_DIR", ".data/snapshots"),
   recordingRetentionDays: parseInt(optionalEnv("RECORDING_RETENTION_DAYS", "30"), 10),
 
