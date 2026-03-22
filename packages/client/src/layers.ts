@@ -25,10 +25,11 @@ function getArrowIconUrl(): string {
 }
 
 // ── Trail config ──
+// All modes get the same visual trail length (~500m).
+// Trimmed by distance, not by point count.
 
-const TRAIL_MAX: Record<TransportMode, number> = {
-  metro: 300, vline: 300, tram: 600, bus: 800,
-};
+const TRAIL_MAX_POINTS = 500;
+const TRAIL_MAX_DIST = 0.0045; // ~500m in degrees
 
 // ── Path queue per vehicle ──
 //
@@ -104,16 +105,27 @@ function advanceAndTrail(q: VehicleQueue, dtMs: number): [number, number] {
 
   // Move queue points that the playhead has passed INTO the trail.
   // These points are from the pathSegment = actual route geometry.
-  const max = TRAIL_MAX[q.mode];
   while (q.points.length > 1 && q.dists[1]! <= q.playhead) {
     const consumed = q.points.shift()!;
     q.dists.shift();
 
-    // Append to trail (deduplicate)
     const last = q.trail[q.trail.length - 1];
     if (!last || Math.abs(last[0] - consumed[0]) > 1e-9 || Math.abs(last[1] - consumed[1]) > 1e-9) {
       q.trail.push(consumed);
-      if (q.trail.length > max) q.trail.shift();
+      if (q.trail.length > TRAIL_MAX_POINTS) q.trail.shift();
+    }
+  }
+
+  // Trim trail by distance so all vehicles have the same visual length.
+  // Measure from the end (arrow tip) backwards, remove points beyond the cap.
+  while (q.trail.length > 2) {
+    const head = q.trail[q.trail.length - 1]!;
+    const tail = q.trail[0]!;
+    const trailDist = degDist(tail, head);
+    if (trailDist > TRAIL_MAX_DIST) {
+      q.trail.shift();
+    } else {
+      break;
     }
   }
 
@@ -131,7 +143,7 @@ function advanceAndTrail(q: VehicleQueue, dtMs: number): [number, number] {
     } else {
       q.trail.push([pos[0], pos[1]]);
       (q.trail as any)._hasTip = true;
-      if (q.trail.length > max) q.trail.shift();
+      if (q.trail.length > TRAIL_MAX_POINTS) q.trail.shift();
     }
   }
 
