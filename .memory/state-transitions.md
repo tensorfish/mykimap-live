@@ -9,10 +9,10 @@ Two independent state machines — one for the server process, one for each clie
 | State | Meaning |
 |---|---|
 | `BOOT` | Process has started. Nothing is loaded. |
-| `INITIALIZING` | Loading config, parsing protobuf schema, binding the HTTP/WebSocket server. |
+| `INITIALIZING` | Loading config, parsing protobuf schema, downloading/loading GTFS Schedule shapes (non-fatal if this fails), binding the HTTP/WebSocket server. |
 | `AWAITING_FIRST_POLL` | Server is listening. First GTFS-RT fetch (all 10 feeds in parallel) is in flight. No vehicle data exists yet — nothing to broadcast. |
-| `RUNNING` | Happy path. Has vehicle data, polling every 30s, interpolating positions, broadcasting ticks to clients. |
-| `DEGRADED` | One or more feed polls failing, but the most recent data is still fresh enough to interpolate from. Partial failures are possible — some modes may update while others don't. Clients are served with a staleness warning. |
+| `RUNNING` | Happy path. Has vehicle data, polling every 7s, interpolating positions along route shapes, broadcasting ticks to clients every ~1s. |
+| `DEGRADED` | At least one feed poll failed, but the server still has vehicle position data fresh enough to interpolate. Two sub-cases: **(a)** all vehicle position feeds failed but data age is below the stale threshold — interpolation continues on old data; **(b)** some feeds failed but at least one vehicle position feed succeeded — partial data. Trip update or service alert failures alone also trigger DEGRADED (they reduce tooltip quality but don't affect the map). |
 | `STALE` | Data age has exceeded the staleness threshold (recommended: 120s — based on observed per-vehicle timestamp ages of up to 15 minutes). Broadcasts continue but are flagged as unreliable. |
 | `SHUTTING_DOWN` | Graceful shutdown in progress. Closing connections, clearing timers. |
 | `STOPPED` | **Terminal.** Process has exited cleanly. |
@@ -53,8 +53,8 @@ stateDiagram-v2
 | From | To | Trigger | Actor |
 |---|---|---|---|
 | `BOOT` | `INITIALIZING` | Process entry point reached | System |
-| `INITIALIZING` | `AWAITING_FIRST_POLL` | Config validated, proto schema parsed, server bound to port | System |
-| `INITIALIZING` | `FATAL` | Missing `OPENDATA_VIC_API_KEY`, port in use, protobuf schema parse failure | System |
+| `INITIALIZING` | `AWAITING_FIRST_POLL` | Config validated, proto schema parsed, shapes loaded (or shape load failed — non-fatal), server bound to port | System |
+| `INITIALIZING` | `FATAL` | Missing `OPENDATA_VIC_API_KEY`, port in use, protobuf schema parse failure. Note: GTFS Schedule download failure is **not** fatal — server continues without shapes and falls back to straight-line interpolation. | System |
 | `AWAITING_FIRST_POLL` | `RUNNING` | At least one of the 10 feed fetches returns valid data (vehicle positions are the minimum requirement) | External (GTFS-RT feed) |
 | `AWAITING_FIRST_POLL` | `FATAL` | All 4 vehicle position feeds fail after retry attempts (API key rejected, network unreachable). Trip update / service alert failures alone don't block startup. | External (GTFS-RT feed) |
 | `RUNNING` | `DEGRADED` | One or more feed polls fail (partial: e.g. bus positions 503 but tram/train still updating, or all trip updates fail but positions still work) or all fail but data age < staleness threshold | External (GTFS-RT feed) |

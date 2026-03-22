@@ -9,8 +9,16 @@
 ```
 packages/
   server/         → Backend service
-  client/         → Map frontend
+    src/
+      poller/       Feed fetching + protobuf decoding
+      shapes/       GTFS Schedule loader, shape index, polyline snapping
+      interpolation/ Origin→target traversal along shapes, geo math
+      broadcast/    WebSocket client management
+    proto/          gtfs-realtime.proto schema
+  client/         → Map frontend (vanilla TS, no framework)
+    src/            Store, WebSocket, map, layers, icons, UI
 docs/             → VitePress documentation site
+.cache/gtfs/      → Cached GTFS Schedule ZIP + extracted files (gitignored)
 ```
 
 Bun workspaces manage all three from the root.
@@ -25,7 +33,8 @@ Bun workspaces manage all three from the root.
 |---|---|---|
 | HTTP + WebSocket | Bun's built-in server (`Bun.serve`) | Native, fast, no extra deps. WebSocket support is first-class. |
 | GTFS Realtime decoding | `protobufjs` | GTFS-RT is a Protocol Buffer format. Decode 10 feeds per poll (~558 KB combined): 4 vehicle positions, 4 trip updates, 2 service alerts. |
-| Interpolation | Custom module | Between polls (every 7s), vehicles advance along their GTFS route shape polyline — following the actual road/track geometry instead of cutting through buildings. Falls back to straight-line projection when no shape is matched. |
+| Route shapes | Custom `shapes/` module | Downloads GTFS Schedule ZIP (~191 MB) on first boot, caches in `.cache/gtfs/`, extracts `shapes.txt` + `trips.txt` to build an in-memory `trip_id → shape polyline` index. Non-fatal if download fails — falls back to straight-line interpolation. |
+| Interpolation | Custom module | Between polls (every 7s), vehicles traverse from their previous known position (origin) to their latest known position (target) along the matched GTFS shape polyline. After reaching the target, they project forward using calculated speed. Falls back to straight-line lerp/projection when no shape is matched. |
 | Shared clock | Server-authoritative tick | The server stamps every broadcast with a canonical timestamp. All clients animate from the same reference point, so multiple open windows show vehicles in the same place. |
 
 ### Data flow
@@ -56,9 +65,11 @@ Every frontend receives the same broadcast at the same server tick. Clients don'
 ### Rendering approach
 
 - **No framework.** Vanilla TypeScript with direct DOM manipulation for UI, TanStack Store for reactivity, deck.gl pure JS API for the map layer.
-- Vehicles are rendered as a deck.gl `ScatterplotLayer` on top of the Mapbox base map.
-- The store subscription triggers `deck.setProps()` whenever world state changes, using deck.gl's built-in transition interpolation for smooth movement.
-- Vehicle type (tram, train, bus) determines color and radius.
+- **Arrows**: Vehicles are rendered as a deck.gl `IconLayer` with a canvas-generated arrow icon, rotated by `getAngle` to match bearing. White arrow tinted per-mode via `getColor`. Stale vehicles render dimmed gray.
+- **Trails**: A `PathLayer` renders underneath the arrows, drawing each vehicle's recent position history as a colored path. The store tracks the last 40 positions per vehicle. Trails use the same mode color at reduced opacity.
+- The store subscription triggers `deck.setProps()` with both layers whenever world state changes. The `IconLayer` uses deck.gl's built-in `transitions` on `getPosition` and `getAngle` for smooth 1s animation between server ticks.
+- **Mode colors**: blue (metro `[52,172,225]`), green (tram `[120,190,32]`), orange (bus `[255,130,0]`), purple (V/Line `[165,127,178]`).
+- **Arrow sizes** (pixels): metro 28, tram 22, bus 14, V/Line 28.
 
 ## Docs (`docs/`)
 

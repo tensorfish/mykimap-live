@@ -4,7 +4,7 @@ A live map of every tram, train, and bus in Victoria, Australia — updated in r
 
 ## What is it?
 
-A top-down map that shows where public transport vehicles are right now. Trams, trains, and buses appear as moving dots on a map of Victoria, with positions pulled from the state's official real-time transport feed.
+A top-down map that shows where public transport vehicles are right now. Trams, trains, and buses appear as moving directional arrows on a map of Victoria, with positions pulled from the state's official real-time transport feed. Each arrow points in the direction of travel, colored by mode, with a fading trail behind it.
 
 ## Who is it for?
 
@@ -37,6 +37,6 @@ At any given moment the map tracks roughly **2,000 vehicles**:
 
 Plus the **GTFS Schedule** static dataset (~191 MB) for route names, colors, stop names, and route shape geometry.
 
-All feeds update every **~30 seconds**. Between updates, the server calculates where each vehicle should be and streams smooth positions to every connected browser.
+The feeds cache server-side for **~30 seconds**. The server polls every **7 seconds** to catch changes fast, snaps each vehicle onto its actual route geometry, and streams smooth interpolated positions to every connected browser.
 
 See [gtfs-vic.md](gtfs-vic.md) for the full feed analysis.

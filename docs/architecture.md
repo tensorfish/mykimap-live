@@ -22,7 +22,7 @@ flowchart TB
     subgraph CLIENT["Client (Vite + vanilla TS)"]
         direction LR
         WS[WebSocket] --> STORE[TanStack\nStore]
-        STORE --> DECK["deck.gl\nScatterplotLayer"]
+        STORE --> DECK["deck.gl\nIconLayer + PathLayer"]
         STORE --> UI[DOM\nstatus bar]
         MAPBOX[Mapbox GL JS\ndark base map] ~~~ DECK
     end

@@ -70,9 +70,9 @@ From the `x-rate-limit` response header:
 - **~300–900 requests per ~30-second window** across all endpoints (second tier, account-level — varies by endpoint).
 - The server caches data for **~30 seconds** — polling faster returns identical data.
 
-**Safe polling interval: 30 seconds for all feeds in parallel.**
+**Feed cache TTL: ~30 seconds.** Polling faster returns identical data, but reduces latency to detect changes.
 
-With 10 feeds at 30s each, that's 20 requests per minute — well within limits.
+**Our polling interval: 7 seconds.** Most polls return the same data. But when the feed does refresh, we catch it within 7s instead of waiting up to 30s. With 10 feeds at 7s, that's ~86 requests per minute — still well within the ~20 req/30s per-endpoint limit (we hit each endpoint ~4 times per 30s window).
 
 ---
 
@@ -464,7 +464,7 @@ shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled
 ## Polling Strategy for the Server
 
 ```
-Every 30 seconds, in parallel:
+Every 7 seconds, in parallel:
   ┌─ Fetch metro/vehicle-positions     (~13 KB)
   ├─ Fetch tram/vehicle-positions      (~20 KB)
   ├─ Fetch bus/vehicle-positions       (~186 KB)
@@ -489,6 +489,16 @@ Per hour: ~67 MB
 4. Merge service alerts — associate with `route_id` to flag affected routes.
 5. Between polls, interpolate vehicle positions using calculated speed + bearing.
 6. Broadcast interpolated state to all clients every ~1s.
+
+### Shape match failures
+
+Not every vehicle will match a shape. Expected unmatched cases:
+- **Replacement bus services** (`route_id` contains `-R:` suffix, e.g. `aus:vic:vic-02-HBE-R:`) — these use ad-hoc routes with no GTFS shape.
+- **ADDED trips** (new trips not in the static schedule) — no `trip_id` in `trips.txt`.
+- **Trip ID format changes** — if the realtime `trip_id` doesn't exactly match the static `trip_id`.
+- **Regional bus** (folder 6) — `route_id` format (`6-14-mjp-1`) differs from the realtime feed format (`406`). Some may fail to match.
+
+Unmatched vehicles fall back to straight-line interpolation. This is acceptable — they'll still move, just not road-snapped.
 
 ### Stale vehicle handling
 

@@ -44,7 +44,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** The poll cycle repeats every 7 seconds. Consecutive polls that return identical data (feed cache hasn't refreshed) are handled without errors.
 
-**Validation:** Let the server run for 60 seconds. Count `Poll complete` log lines — should be ~8–9. Vehicle counts should be stable (±20 between polls as vehicles enter/leave service). No errors.
+**Validation:** Let the server run for 60 seconds. Count `Poll complete` log lines — should be ~8–9. Vehicle counts between consecutive polls should not swing more than 10% (vehicles enter/leave service gradually, not in bulk). No errors or uncaught exceptions.
 
 ---
 
@@ -62,7 +62,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** Each vehicle position is matched to its GTFS shape via `trip_id → shape_id`, and its lat/lon is snapped onto the shape polyline.
 
-**Validation:** Pick a known tram route (e.g. route 96). Log the raw feed lat/lon and the snapped lat/lon for one vehicle on that route. The snapped position should be on or very near the tram tracks (verify by pasting both coordinates into Google Maps).
+**Validation:** Pick a known tram route (e.g. route 96, `route_id: aus:vic:vic-03-96:`). Log the raw feed lat/lon and the snapped lat/lon for one vehicle on that route. The snapped position must be within 50 meters of the tram tracks. Verify by computing haversine distance between raw and snapped — should be < 50m for a well-matched vehicle. Also log the `shapeId` to confirm it's non-empty.
 
 ---
 
@@ -70,7 +70,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** After two consecutive polls, the server calculates speed (m/s) and bearing (degrees) for each vehicle from position deltas along the shape.
 
-**Validation:** Let the server run for 2+ polls. Log a sample vehicle showing `speed` (should be 0–33 m/s for trains, 0–22 for buses) and `bearing` (0–360). Trams should have non-zero bearing (inferred from shape) despite the feed providing 0.
+**Validation:** Let the server run for 2+ polls (15+ seconds). Log a sample moving vehicle (one where position changed between polls) showing `speed` and `bearing`. Speed must be > 0 and ≤ the mode's max (33.3 m/s for metro/vline, 22.2 m/s for tram/bus — these are the caps in `interpolation/index.ts`). Bearing must be 0–360. For a tram with a matched shape: bearing must be non-zero even though the feed provides 0.
 
 ---
 
@@ -78,7 +78,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** Vehicles with per-entity timestamps older than 120 seconds are flagged as `stale: true` and not interpolated.
 
-**Validation:** Log the count of stale vs active vehicles after a poll. There should always be some stale vehicles (parked at depots). Verify a stale vehicle has `speed: 0` and doesn't move between broadcasts.
+**Validation:** Log the count of stale (`timestamp age > 120s`) vs active vehicles after a poll. During off-peak hours there will typically be stale vehicles (parked at depots), though during peak hours most may be fresh. The key test: pick any vehicle where `stale: true` — its position must not change between consecutive broadcast ticks. Its `speed` in the broadcast payload must be 0 or it must be excluded from interpolation.
 
 ---
 
@@ -86,7 +86,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** Between polls, vehicles smoothly traverse from their previous position (origin) to their new position (target) along the shape, then project forward past the target.
 
-**Validation:** Log 5 consecutive broadcast positions for one moving vehicle. Positions should form a smooth progression along the route — not a sudden jump to the target. Paste the 5 coordinates into Google Maps — they should all fall on the road/track.
+**Validation:** Log 5 consecutive broadcast positions (5 ticks, ~5 seconds) for one moving, shape-matched vehicle. The distance between consecutive positions should be roughly equal (constant speed interpolation). No single tick should jump more than 2× the average step. All 5 positions should be within 30 meters of the vehicle's shape polyline (verify by computing snap distance). For a vehicle that received a new poll target mid-sequence: positions should smoothly approach the target, not teleport to it.
 
 ---
 
@@ -104,7 +104,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** Connected WebSocket clients receive a new world state message approximately every 1 second.
 
-**Validation:** Connect with `wscat`, count messages over 10 seconds — should be ~10 messages. Each message has a different `timestamp`. Vehicle positions should change slightly between consecutive messages (interpolation working).
+**Validation:** Connect with `wscat`, count messages over 10 seconds — should be ~10 messages. Each message has a different `timestamp`. For any vehicle where `stale: false` and `speed > 0.5`: its `latitude` or `longitude` must differ between consecutive ticks (interpolation is advancing it). For any vehicle where `stale: true`: its position must be identical across ticks.
 
 ---
 
@@ -162,7 +162,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** A fading trail follows each moving vehicle, drawn by the PathLayer underneath the arrows.
 
-**Validation:** Moving vehicles have visible colored trails behind them. Stationary vehicles have no trail. The trail follows the route — not a straight line. Trails are shorter when zoomed in, longer when zoomed out.
+**Validation:** Moving vehicles have visible colored trails behind them. Stationary vehicles (speed < 0.5 or stale) have no trail or a single-point trail. Trail color matches the vehicle's mode color (green for tram, blue for metro, etc.). The trail is a connected path of the vehicle's last 40 broadcast positions — at 1 tick/second, this represents ~40 seconds of movement history.
 
 ---
 
@@ -186,9 +186,9 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 ### Step 22: Stale state shown to user
 
-**Goal:** If the server stops broadcasting (e.g. all feeds fail), the client shows a stale warning after 5 seconds.
+**Goal:** If the WebSocket is alive but no ticks arrive for 5 seconds, the client shows a stale warning. Note: this is different from a disconnect — STALE means the connection is open but the server isn't sending data (e.g. server is in DEGRADED/STALE state itself, or the broadcast loop stalled).
 
-**Validation:** Stop the server. After 5 seconds, status bar changes to "Stale — waiting for update" with a yellow dot. Vehicles freeze on screen.
+**Validation:** This is hard to trigger naturally. To test: temporarily modify the server's `broadcastCycle` to skip sending (e.g. add an early return). The client WebSocket stays connected but receives no messages. After 5 seconds, the status bar changes to "Stale — waiting for update" with a yellow dot. Vehicles freeze on screen. Remove the modification — next tick arrives, status returns to "Live".
 
 ---
 
@@ -204,7 +204,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** Two browser windows open to the same URL show vehicles in the same positions at the same time.
 
-**Validation:** Open two browser windows side by side. Zoom both to the same area. Pick a moving vehicle — its position and trail should be visually identical in both windows.
+**Validation:** Open two browser windows side by side. Zoom both to Melbourne CBD at the same zoom level. Both should show the same number of vehicles (check status bar count — must match). Pick a visible tram — its arrow should be at the same map position in both windows. The trails won't be pixel-identical (they depend on when each client connected) but the arrow heads should be, because the server broadcasts the same interpolated state to all clients on the same tick.
 
 ---
 
@@ -230,7 +230,7 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 **Goal:** The built artifacts work correctly — server runs from `dist/`, client serves from `dist/`.
 
-**Validation:** Run `bun run build`. Start the server with `bun run start` (from `packages/server`). Serve `packages/client/dist/` with any static file server. Open in browser — map loads, vehicles move.
+**Validation:** Run `bun run build`. Start the server with `bun run start` (from `packages/server`). The server must serve the client's static files from `packages/client/dist/` (or a reverse proxy must be configured to serve the client and proxy `/ws` to the server). Open in browser — map loads, vehicles move. This validates that the built artifacts work end-to-end. Note: the server currently only handles `/ws` and `/health` — serving static files or configuring a proxy is part of this step's implementation.
 
 ---
 
