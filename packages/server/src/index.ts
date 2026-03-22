@@ -21,7 +21,11 @@ let broadcastSeq = 0;
 
 /** Recent broadcast ticks — sent as backlog to new clients so they
  *  can build a continuous path queue before animation starts. */
-const BACKLOG_SIZE = 10; // ~10 seconds of ticks at 1s interval
+/** Number of recent broadcast ticks sent to new clients on connect.
+ *  Client fast-forwards through all but the last tick to pre-build
+ *  the trail, then animates from the last tick onward.
+ *  Minimum 5 so the trail is visible from the first frame. */
+const BACKLOG_SIZE = 10;
 const tickBacklog: WorldState[] = [];
 
 // ── Boot sequence ──

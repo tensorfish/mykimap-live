@@ -117,10 +117,50 @@ function sampleQueue(q: VehicleQueue): [number, number] {
   return q.points[q.points.length - 1]!;
 }
 
-/** Feed a backlog of ticks into the queues (on initial connect) */
+/**
+ * Feed a backlog of ticks into the queues (on initial connect).
+ * After appending all path segments, fast-forward the playhead through
+ * the first (backlog.length - 1) ticks so the trail is pre-built.
+ * The playhead stops 1 tick before the end, leaving the last tick's
+ * path as the animation starting point.
+ */
 export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {
+  if (backlog.length === 0) return;
+
+  // Feed all ticks to build the full path queue
   for (const tick of backlog) {
     feedTick(tick.vehicles);
+  }
+
+  // Fast-forward playhead through all but the last tick.
+  // This consumes the historical path and builds trail points
+  // so the trail is visible from the first rendered frame.
+  const ticksToConsume = backlog.length - 1;
+  if (ticksToConsume <= 0) return;
+
+  for (const [, q] of queues) {
+    if (q.speed <= 0 || q.totalDist <= 0) continue;
+
+    // Each tick added roughly (totalDist / backlog.length) of path.
+    // Advance the playhead to consume ticksToConsume ticks worth.
+    const targetDist = q.totalDist * (ticksToConsume / backlog.length);
+    const steps = ticksToConsume * 10; // sample trail at ~10 points per tick
+    const stepDist = targetDist / steps;
+
+    for (let i = 0; i < steps; i++) {
+      q.playhead = Math.min(q.playhead + stepDist, q.totalDist);
+      const pos = sampleQueue(q);
+
+      // Append trail point
+      const lastPt = q.trail[q.trail.length - 1];
+      if (!lastPt || Math.abs(lastPt[0] - pos[0]) > 1e-7 || Math.abs(lastPt[1] - pos[1]) > 1e-7) {
+        q.trail.push([pos[0], pos[1]]);
+        const max = TRAIL_MAX[q.mode];
+        if (q.trail.length > max) q.trail.splice(0, q.trail.length - max);
+      }
+    }
+
+    trimQueue(q);
   }
 }
 
