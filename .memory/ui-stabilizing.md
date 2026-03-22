@@ -289,32 +289,162 @@ I5: stale/stationary vehicles: shapeDist not advanced → no drift ✓
 
 ---
 
-## 9. Implementation Changes Required
+---
 
-### Server
+## 9. Implementation Plan
 
-1. **`shapes/loader.ts`**: Store both direction shapes per route:
-   `routeToShapes: Map<routeId, Map<directionId, shapeId>>`
+Six steps. Each is independently testable. Do them in order.
 
-2. **`interpolation/index.ts`**: Complete rewrite of VehicleState:
-   - `shapeDist` is the current baseline (advanced by 1s per beat)
-   - `lastPollShapeDist` for ground truth reset
-   - `shape` locked on first sighting (no re-lookup every tick)
-   - `interpolate()` advances by exactly 1s and updates baseline
-   - Trail appended only in `processSnapshot()`
+---
 
-3. **`bearingAtDist`**: Fix the loop (search then fallback)
+### Step A: Fix `bearingAtDist` loop
 
-### Client
+**File:** `packages/server/src/interpolation/index.ts` → `bearingAtDist()`
 
-4. **`layers.ts`**: `updateLerpTargets()` sets `prev` to the last computed display position (from `computeFrame` output), not to the last server position
+**What:** Replace the loop that has an in-loop fallthrough with a clean search-then-fallback.
 
-5. **`map.ts`**: No structural change — rAF loop with `computeFrame` stays
+**Before (buggy):**
+```ts
+for (let i = 0; i < shape.length - 1; i++) {
+  if (dist >= shape[i].dist && dist <= shape[i+1].dist) {
+    a = shape[i]; b = shape[i+1]; break;
+  }
+  a = shape[shape.length - 2]; // overwrites every non-match
+  b = shape[shape.length - 1];
+}
+```
 
-### What doesn't change
+**After:**
+```ts
+let a = shape[0], b = shape[1]; // default: first segment
+for (let i = 0; i < shape.length - 1; i++) {
+  if (dist >= shape[i].dist && dist <= shape[i+1].dist) {
+    a = shape[i]; b = shape[i+1]; break;
+  }
+}
+// If dist > last point, use last segment
+if (dist > shape[shape.length - 1].dist) {
+  a = shape[shape.length - 2]; b = shape[shape.length - 1];
+}
+```
 
-- WebSocket protocol (still sends `WorldState` with vehicles + trails)
-- Store structure
-- Panel, UI, selection
-- Trail layer rendering
-- Route shape layer
+**Validation:** Log bearing for dist=0, dist=mid, dist=end on a known shape. All three should return sensible bearings (not the same segment).
+
+---
+
+### Step B: Dual-direction shapes per route
+
+**File:** `packages/server/src/shapes/loader.ts`
+
+**What:**
+- Change `routeToShape: Map<routeId, shapeId>` to `routeToShapes: Map<routeId, Map<string, string>>` where inner key is `direction_id` ("0" or "1") and value is `shapeId`.
+- During trip parsing, populate both directions.
+- New export: `getShapesForRoute(routeId): { dir0?: ShapePolyline, dir1?: ShapePolyline }`
+
+**File:** `packages/server/src/interpolation/index.ts` → `processSnapshot()`
+
+**What:** On first vehicle sighting (no prev state):
+1. If `getShapeForTrip()` matches → use that shape, done.
+2. Else get `{ dir0, dir1 }` from `getShapesForRoute()`.
+3. Snap GPS to dir0 → haversine distance d0. Snap GPS to dir1 → haversine distance d1.
+4. Pick whichever has the smaller snap distance.
+5. Store chosen shape reference + direction in `VehicleState`.
+6. On subsequent polls: reuse the stored shape, never re-pick.
+
+**Validation:** Run server. For tram route 96, log which direction was picked and the snap distance. Should be < 10m. Compare with the rejected direction — should be > 10m (on the opposite track).
+
+---
+
+### Step C: Rewrite `processSnapshot()` — trail from poll data only
+
+**File:** `packages/server/src/interpolation/index.ts`
+
+**What:**
+- Remove `appendTrail()` from `interpolate()` entirely.
+- `appendTrail()` is called only in `processSnapshot()`, only on fresh data (dt > 0), using the snapped position.
+- This guarantees trail points are real GPS-snapped positions on the correct shape.
+
+**Validation:** Run server for 2 minutes. Inspect trail data in the WS payload. Every trail point should be exactly on the route shape (snap distance = 0). Trails will have fewer points (~1 per 30s feed refresh) but they'll all be accurate.
+
+---
+
+### Step D: Rewrite `interpolate()` — 1s beat advancement
+
+**File:** `packages/server/src/interpolation/index.ts`
+
+**What:** Replace the current elapsed-based interpolation with a beat model:
+
+```ts
+VehicleState adds:
+  shapeDist: number       // current baseline — advanced by 1s each beat
+  lastPollShapeDist: number // ground truth from last feed poll
+
+interpolate():
+  for each vehicle:
+    if stale or speed < 0.5: return as-is
+    
+    advanceDist = speed × 1.0 × direction  // exactly 1s of movement
+    shapeDist += advanceDist
+    clamp to [0, shapeLength]
+    
+    pos = sampleShape(shapeDist)
+    bearing = bearingAtDist(shapeDist, direction)
+    
+    return { ...v, lat: pos.lat, lon: pos.lon, bearing }
+```
+
+Key difference: `shapeDist` is **mutated in the state** on each beat. It's no longer recalculated from `elapsed × speed`. This means each beat advances exactly 1s, and the baseline moves forward. On fresh poll, `shapeDist` resets to the snapped ground truth.
+
+**Validation:** Log shapeDist for a moving vehicle across 5 consecutive beats. Should increase by ~`speed × 1s` each time. On a fresh poll (visible in logs), shapeDist should reset to a nearby value (the actual position).
+
+---
+
+### Step E: Fix client lerp — prev from display position
+
+**File:** `packages/client/src/layers.ts` → `updateLerpTargets()` and `computeFrame()`
+
+**What:**
+- `computeFrame()` already computes `[lon, lat]` per vehicle per frame. After computing, store the output position back into `lerpStates` as `displayLon`/`displayLat`.
+- `updateLerpTargets()` sets `prevLon/prevLat` to the last `displayLon/displayLat` instead of to the last `curLon/curLat`.
+- This guarantees the lerp always starts from where the arrow was actually rendered, not from a server position that may differ.
+
+**Before:**
+```ts
+// In updateLerpTargets:
+s.prevLon = s.curLon;  // last server position (may be behind display)
+s.prevLat = s.curLat;
+```
+
+**After:**
+```ts
+// In updateLerpTargets:
+s.prevLon = s.displayLon;  // last rendered position (what user saw)
+s.prevLat = s.displayLat;
+```
+
+**Validation:** Observe a vehicle turning a corner. The arrow should smoothly follow the curve of each 1s server tick. No backward jumps, no micro-teleports.
+
+---
+
+### Step F: Verify all invariants
+
+Run the server and client together for 5 minutes. Check:
+
+1. **I1 (on-route):** Select a tram. Its trail should sit exactly on the tram tracks. No off-route segments.
+2. **I2 (bearing matches movement):** Watch 10 moving arrows for 30s each. Every arrow should point in the direction it's traveling.
+3. **I3 (trail on route):** Zoom into a curve. The trail should follow the curve, not cut across.
+4. **I4 (no teleports):** Watch a busy area for 2 minutes. No arrow should visibly jump or snap to a new position.
+5. **I5 (stationary = still):** Find a parked vehicle (stale or speed < 0.5). It should not move at all.
+
+---
+
+## What doesn't change
+
+- WebSocket protocol (still sends `WorldState` with vehicles + trails + alerts)
+- Client store structure (`AppState`)
+- Panel, UI, selection, status bar
+- Trail PathLayer rendering code
+- Route shape layer and `/api/route-shape` endpoint
+- `map.ts` render loop structure (rAF + `computeFrame`)
+- Broadcast interval (1s)
+- Poll interval (15s)
