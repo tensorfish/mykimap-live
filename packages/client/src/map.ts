@@ -1,8 +1,8 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
-import type { TransportMode } from "./types.js";
+import type { VehiclePosition, TransportMode } from "./types.js";
 import { store, getVehicles, getTrails, getSelectedEntityId, getRouteShape, selectVehicle } from "./store.js";
-import { createVehicleLayer, createTrailLayer, createRouteShapeLayer } from "./layers.js";
+import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, updateLerpTargets, computeFrame } from "./layers.js";
 
 const INITIAL_VIEW = {
   longitude: 144.963,
@@ -78,35 +78,50 @@ export function initMap(
     });
   });
 
-  // ── Update layers when store changes ──
-  // Server interpolates along route shapes at 1s ticks.
-  // deck.gl transitions handle the smooth animation between ticks.
-  // No client-side projection needed.
+  // ── Data + render ──
 
+  let currentVehicles: VehiclePosition[] = [];
+  let currentTrails: Record<string, Array<[number, number]>> = {};
+
+  // When new server tick arrives, update lerp targets
   store.subscribe(() => {
-    if (!deck) return;
-
     const vehicles = getVehicles();
+    const trails = getTrails();
     if (vehicles.length === 0) return;
 
-    const trails = getTrails();
-    const selectedId = getSelectedEntityId();
-    const routeShape = getRouteShape();
+    updateLerpTargets(vehicles);
+    currentVehicles = vehicles;
+    currentTrails = trails;
+  });
 
-    let selectedMode: TransportMode | null = null;
-    if (selectedId) {
-      const v = vehicles.find((v) => v.entityId === selectedId);
-      if (v) selectedMode = v.mode;
+  // 60fps render loop — lerps between server ticks by entityId
+  function renderFrame() {
+    if (deck && currentVehicles.length > 0) {
+      const selectedId = getSelectedEntityId();
+      const routeShape = getRouteShape();
+
+      // Compute lerped positions for THIS frame
+      const display = computeFrame(currentVehicles);
+
+      let selectedMode: TransportMode | null = null;
+      if (selectedId) {
+        const v = currentVehicles.find((v) => v.entityId === selectedId);
+        if (v) selectedMode = v.mode;
+      }
+
+      deck.setProps({
+        layers: [
+          createRouteShapeLayer(routeShape, selectedMode),
+          createTrailLayer(currentVehicles, currentTrails, selectedId),
+          createVehicleLayer(display, selectedId),
+        ],
+      });
     }
 
-    deck.setProps({
-      layers: [
-        createRouteShapeLayer(routeShape, selectedMode),
-        createTrailLayer(vehicles, trails, selectedId),
-        createVehicleLayer(vehicles, selectedId),
-      ],
-    });
-  });
+    requestAnimationFrame(renderFrame);
+  }
+
+  requestAnimationFrame(renderFrame);
 
   map.on("load", () => onReady());
 }

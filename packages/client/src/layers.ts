@@ -18,34 +18,135 @@ const MODE_SIZE: Record<TransportMode, number> = {
   metro: 28, tram: 22, bus: 14, vline: 28,
 };
 
-// ── Arrow icon ──
-
 let arrowIconUrl: string | null = null;
 function getArrowIconUrl(): string {
   if (!arrowIconUrl) arrowIconUrl = createArrowIconURL(64);
   return arrowIconUrl;
 }
 
-// ── Vehicle arrow layer ──
+// ── Client-side lerp engine ──
 //
-// Server sends positions interpolated along route shapes every 1s.
-// Client renders directly — no client-side projection.
-// Smooth movement comes from deck.gl transitions matching by
-// stable array order (server sorts by entityId).
+// Server sends positions every 1s. We lerp between the previous
+// and current server position at 60fps, keyed by entityId.
+// This is immune to array reordering (unlike deck.gl transitions).
+
+interface LerpState {
+  prevLon: number;
+  prevLat: number;
+  prevBearing: number;
+  curLon: number;
+  curLat: number;
+  curBearing: number;
+  updatedAt: number; // ms when curXxx was set
+}
+
+const lerpStates = new Map<string, LerpState>();
+const LERP_MS = 1000; // matches server broadcast interval
+
+/** Call when new server data arrives. Previous becomes prev, new becomes cur. */
+export function updateLerpTargets(vehicles: VehiclePosition[]): void {
+  const now = Date.now();
+  const seen = new Set<string>();
+
+  for (const v of vehicles) {
+    seen.add(v.entityId);
+    const s = lerpStates.get(v.entityId);
+
+    if (s) {
+      // Promote current → previous, set new current
+      s.prevLon = s.curLon;
+      s.prevLat = s.curLat;
+      s.prevBearing = s.curBearing;
+      s.curLon = v.longitude;
+      s.curLat = v.latitude;
+      s.curBearing = v.bearing;
+      s.updatedAt = now;
+    } else {
+      // First time — no lerp, snap instantly
+      lerpStates.set(v.entityId, {
+        prevLon: v.longitude, prevLat: v.latitude, prevBearing: v.bearing,
+        curLon: v.longitude, curLat: v.latitude, curBearing: v.bearing,
+        updatedAt: now,
+      });
+    }
+  }
+
+  for (const id of lerpStates.keys()) {
+    if (!seen.has(id)) lerpStates.delete(id);
+  }
+}
+
+/** Pre-computed per-frame display data */
+export interface DisplayVehicle {
+  entityId: string;
+  mode: TransportMode;
+  position: [number, number];
+  angle: number;
+  stale: boolean;
+  speed: number;
+  bearing: number;
+  routeId: string;
+  vehicleId: string;
+  vehicleLabel: string;
+}
+
+/** Compute interpolated positions for this exact frame. Call every rAF. */
+export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
+  const now = Date.now();
+
+  return vehicles.map((v) => {
+    const s = lerpStates.get(v.entityId);
+
+    if (!s || v.stale || v.speed < 0.5) {
+      return {
+        entityId: v.entityId, mode: v.mode,
+        position: [v.longitude, v.latitude] as [number, number],
+        angle: -v.bearing, stale: v.stale, speed: v.speed,
+        bearing: v.bearing, routeId: v.routeId,
+        vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
+      };
+    }
+
+    const elapsed = now - s.updatedAt;
+    const t = Math.min(elapsed / LERP_MS, 1);
+
+    // Lerp position
+    const lon = s.prevLon + t * (s.curLon - s.prevLon);
+    const lat = s.prevLat + t * (s.curLat - s.prevLat);
+
+    // Lerp bearing with wraparound
+    let fromB = -s.prevBearing;
+    let toB = -s.curBearing;
+    let diff = toB - fromB;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    const angle = fromB + t * diff;
+
+    return {
+      entityId: v.entityId, mode: v.mode,
+      position: [lon, lat] as [number, number],
+      angle, stale: v.stale, speed: v.speed,
+      bearing: v.bearing, routeId: v.routeId,
+      vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
+    };
+  });
+}
+
+// ── Vehicle arrow layer ──
 
 export function createVehicleLayer(
-  vehicles: VehiclePosition[],
+  display: DisplayVehicle[],
   selectedId: string | null
 ) {
   const hasSelection = selectedId !== null;
 
-  return new IconLayer<VehiclePosition>({
+  return new IconLayer<DisplayVehicle>({
     id: "vehicles",
-    data: vehicles,
+    data: display,
     iconAtlas: getArrowIconUrl(),
     iconMapping: ARROW_ICON_MAPPING,
     getIcon: () => "arrow",
-    getPosition: (d) => [d.longitude, d.latitude],
+    getPosition: (d) => d.position,
     getColor: (d) => {
       if (hasSelection && d.entityId !== selectedId) return DIMMED_COLOR;
       if (d.stale) return [...STALE_COLOR, 160];
@@ -55,26 +156,20 @@ export function createVehicleLayer(
       if (hasSelection && d.entityId === selectedId) return MODE_SIZE[d.mode] * 1.4;
       return MODE_SIZE[d.mode];
     },
-    getAngle: (d) => -d.bearing,
+    getAngle: (d) => d.angle,
     sizeScale: 1,
     sizeUnits: "pixels" as const,
     sizeMinPixels: 8,
     sizeMaxPixels: 40,
     pickable: true,
     billboard: false,
-
-    // Smooth transitions between 1s server ticks.
-    // Server sorts by entityId so array order is stable.
-    transitions: {
-      getPosition: { duration: 1000, easing: (t: number) => t },
-      getAngle: { duration: 1000, easing: (t: number) => t },
-    },
+    // NO transitions — we lerp manually by entityId above.
+    // deck.gl transitions match by array index and splatter
+    // when vehicles enter/leave the array.
   });
 }
 
 // ── Trail layer ──
-// Trail data comes from the server, sampled from the route shape.
-// It follows the road because the server interpolates along shapes.
 
 interface TrailData {
   entityId: string;
@@ -136,9 +231,7 @@ export function createRouteShapeLayer(
   if (!routeShape || routeShape.length < 2 || !mode) {
     return new PathLayer({ id: "route-shape", data: [] });
   }
-
   const [r, g, b] = MODE_COLORS[mode];
-
   return new PathLayer({
     id: "route-shape",
     data: [{ path: routeShape }],
