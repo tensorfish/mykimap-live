@@ -1,7 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition } from "./types.js";
-import { store, getVehicles, getTrails } from "./store.js";
+import { store, getVehicles, getTrails, getSelectedEntityId, selectVehicle } from "./store.js";
 import { createVehicleLayer, createTrailLayer, snapshotPositions } from "./layers.js";
 
 // Melbourne CBD
@@ -15,15 +15,6 @@ const INITIAL_VIEW = {
 
 let deck: Deck | null = null;
 
-/**
- * Initialize the Mapbox base map and deck.gl overlay.
- *
- * Mapbox owns all user interaction (pan, zoom, rotate).
- * deck.gl renders as a passive overlay — no controller.
- * On each Mapbox move event, we sync deck.gl's viewState.
- *
- * `onReady` is called exactly once when the map finishes loading.
- */
 export function initMap(
   container: HTMLDivElement,
   mapboxToken: string,
@@ -41,33 +32,40 @@ export function initMap(
     antialias: true,
   });
 
-  // deck.gl as a passive overlay — Mapbox handles interaction
+  // deck.gl as passive overlay — Mapbox owns all mouse interaction
   deck = new Deck({
     parent: container,
     viewState: INITIAL_VIEW,
-    controller: false, // Mapbox owns pan/zoom/rotate
+    controller: false,
     layers: [],
     style: {
       position: "absolute",
       top: "0",
       left: "0",
-      pointerEvents: "none", // Let mouse events pass through to Mapbox
+      pointerEvents: "none",
     },
+  });
 
-    getTooltip: ({ object }: any) => {
-      if (!object) return null;
-      return {
-        text: [
-          `${object.mode.toUpperCase()}`,
-          `Route: ${object.routeId}`,
-          `Vehicle: ${object.vehicleId}`,
-          object.vehicleLabel ? `Class: ${object.vehicleLabel}` : "",
-          object.stale ? "⚠ Stale position" : "",
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      };
-    },
+  // Click handler: use Mapbox's click event + deck.pickObject()
+  // This way Mapbox keeps full control of pan/zoom/rotate,
+  // and we intercept clicks only to pick vehicle objects.
+  map.on("click", (e) => {
+    if (!deck) return;
+    const picked = deck.pickObject({
+      x: e.point.x,
+      y: e.point.y,
+      radius: 10,
+    });
+    if (picked?.object?.entityId) {
+      const currentSelected = getSelectedEntityId();
+      if (currentSelected === picked.object.entityId) {
+        selectVehicle(null);
+      } else {
+        selectVehicle(picked.object.entityId);
+      }
+    } else {
+      selectVehicle(null);
+    }
   });
 
   // Sync deck.gl viewState whenever Mapbox moves
@@ -88,9 +86,6 @@ export function initMap(
   map.on("move", syncViewState);
 
   // ── Render loop ──
-  // On each new WS tick: snapshot previous positions, then start a
-  // requestAnimationFrame loop that lerps arrows from old → new over 1s.
-  // This gives smooth 60fps movement keyed by entityId, not array index.
 
   let currentVehicles: VehiclePosition[] = [];
   let currentTrails: Record<string, Array<[number, number]>> = {};
@@ -98,32 +93,31 @@ export function initMap(
 
   function renderFrame() {
     if (!deck) return;
+    const selectedId = getSelectedEntityId();
     deck.setProps({
       layers: [
-        createTrailLayer(currentVehicles, currentTrails),
-        createVehicleLayer(currentVehicles),
+        createTrailLayer(currentVehicles, currentTrails, selectedId),
+        createVehicleLayer(currentVehicles, selectedId),
       ],
     });
     animFrameId = requestAnimationFrame(renderFrame);
   }
 
+  // Re-render on data changes
   store.subscribe(() => {
     const vehicles = getVehicles();
     const trails = getTrails();
     if (vehicles.length === 0) return;
 
-    // Snapshot old positions before updating — lerp uses these
     snapshotPositions(vehicles);
     currentVehicles = vehicles;
     currentTrails = trails;
 
-    // Start render loop if not already running
     if (!animFrameId) {
       animFrameId = requestAnimationFrame(renderFrame);
     }
   });
 
-  // Map ready — fire callback exactly once
   map.on("load", () => {
     onReady();
   });

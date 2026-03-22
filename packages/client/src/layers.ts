@@ -5,13 +5,14 @@ import { createArrowIconURL, ARROW_ICON_MAPPING } from "./icons.js";
 // ── Colors ──
 
 const MODE_COLORS: Record<TransportMode, [number, number, number]> = {
-  metro: [52, 172, 225],   // Blue
-  tram: [120, 190, 32],    // Green
-  bus: [255, 130, 0],      // Orange
-  vline: [165, 127, 178],  // Purple
+  metro: [52, 172, 225],
+  tram: [120, 190, 32],
+  bus: [255, 130, 0],
+  vline: [165, 127, 178],
 };
 
 const STALE_COLOR: [number, number, number] = [100, 100, 100];
+const DIMMED_COLOR: [number, number, number, number] = [80, 80, 80, 80];
 
 // ── Sizing ──
 
@@ -22,47 +23,34 @@ const MODE_SIZE: Record<TransportMode, number> = {
   vline: 28,
 };
 
-// ── Arrow icon (generated once) ──
+// ── Arrow icon ──
 
 let arrowIconUrl: string | null = null;
-
 function getArrowIconUrl(): string {
-  if (!arrowIconUrl) {
-    arrowIconUrl = createArrowIconURL(64);
-  }
+  if (!arrowIconUrl) arrowIconUrl = createArrowIconURL(64);
   return arrowIconUrl;
 }
 
-// ── Client-side interpolation state ──
-// We do NOT use deck.gl transitions (they match by array index and
-// splatter when vehicles enter/leave the array). Instead we lerp
-// manually using a previous position map keyed by entityId.
+// ── Client-side lerp state ──
 
 interface PrevState {
   lon: number;
   lat: number;
   bearing: number;
-  timestamp: number; // when this state was set (Date.now())
+  timestamp: number;
 }
 
 const prevPositions = new Map<string, PrevState>();
-const LERP_DURATION = 1000; // ms — matches server broadcast interval
+const LERP_DURATION = 1000;
 
-/**
- * Call this from the store subscriber BEFORE creating layers.
- * Captures the current positions as the "previous" state for the next tick.
- */
 export function snapshotPositions(vehicles: VehiclePosition[]): void {
   const now = Date.now();
   const seen = new Set<string>();
 
   for (const v of vehicles) {
     seen.add(v.entityId);
-
     const prev = prevPositions.get(v.entityId);
     if (prev) {
-      // Update: the old "current" becomes the new "previous"
-      // Only update if the position actually changed
       if (prev.lon !== v.longitude || prev.lat !== v.latitude) {
         prev.lon = v.longitude;
         prev.lat = v.latitude;
@@ -70,17 +58,13 @@ export function snapshotPositions(vehicles: VehiclePosition[]): void {
         prev.timestamp = now;
       }
     } else {
-      // New vehicle — no lerp, just snap
       prevPositions.set(v.entityId, {
-        lon: v.longitude,
-        lat: v.latitude,
-        bearing: v.bearing,
-        timestamp: now,
+        lon: v.longitude, lat: v.latitude,
+        bearing: v.bearing, timestamp: now,
       });
     }
   }
 
-  // Remove departed vehicles
   for (const id of prevPositions.keys()) {
     if (!seen.has(id)) prevPositions.delete(id);
   }
@@ -88,8 +72,12 @@ export function snapshotPositions(vehicles: VehiclePosition[]): void {
 
 // ── Vehicle arrow layer ──
 
-export function createVehicleLayer(vehicles: VehiclePosition[]) {
+export function createVehicleLayer(
+  vehicles: VehiclePosition[],
+  selectedId: string | null
+) {
   const now = Date.now();
+  const hasSelection = selectedId !== null;
 
   return new IconLayer<VehiclePosition>({
     id: "vehicles",
@@ -100,32 +88,30 @@ export function createVehicleLayer(vehicles: VehiclePosition[]) {
     getPosition: (d) => {
       const prev = prevPositions.get(d.entityId);
       if (!prev) return [d.longitude, d.latitude];
-
       const elapsed = now - prev.timestamp;
       if (elapsed >= LERP_DURATION) return [d.longitude, d.latitude];
-
-      // Lerp from previous position to current
       const t = elapsed / LERP_DURATION;
       return [
         prev.lon + t * (d.longitude - prev.lon),
         prev.lat + t * (d.latitude - prev.lat),
       ];
     },
-    getColor: (d) =>
-      d.stale ? [...STALE_COLOR, 160] : [...MODE_COLORS[d.mode], 230],
-    getSize: (d) => MODE_SIZE[d.mode],
+    getColor: (d) => {
+      if (hasSelection && d.entityId !== selectedId) return DIMMED_COLOR;
+      if (d.stale) return [...STALE_COLOR, 160];
+      return [...MODE_COLORS[d.mode], 230];
+    },
+    getSize: (d) => {
+      if (hasSelection && d.entityId === selectedId) return MODE_SIZE[d.mode] * 1.4;
+      return MODE_SIZE[d.mode];
+    },
     getAngle: (d) => {
       const prev = prevPositions.get(d.entityId);
       if (!prev) return -d.bearing;
-
       const elapsed = now - prev.timestamp;
       if (elapsed >= LERP_DURATION) return -d.bearing;
-
-      // Lerp bearing (handle wraparound)
       const t = elapsed / LERP_DURATION;
-      let from = -prev.bearing;
-      let to = -d.bearing;
-      let diff = to - from;
+      let from = -prev.bearing, to = -d.bearing, diff = to - from;
       if (diff > 180) diff -= 360;
       if (diff < -180) diff += 360;
       return from + t * diff;
@@ -136,7 +122,6 @@ export function createVehicleLayer(vehicles: VehiclePosition[]) {
     sizeMaxPixels: 40,
     pickable: true,
     billboard: false,
-    // No deck.gl transitions — we lerp manually above with entityId keys
   });
 }
 
@@ -157,18 +142,21 @@ const TRAIL_WIDTH: Record<TransportMode, number> = {
 
 export function createTrailLayer(
   vehicles: VehiclePosition[],
-  trails: Record<string, Array<[number, number]>>
+  trails: Record<string, Array<[number, number]>>,
+  selectedId: string | null
 ) {
   const modeMap = new Map<string, TransportMode>();
-  for (const v of vehicles) {
-    modeMap.set(v.entityId, v.mode);
-  }
+  for (const v of vehicles) modeMap.set(v.entityId, v.mode);
 
+  const hasSelection = selectedId !== null;
   const data: TrailData[] = [];
+
   for (const [entityId, path] of Object.entries(trails)) {
     if (path.length < 2) continue;
     const mode = modeMap.get(entityId);
     if (!mode) continue;
+    // When a vehicle is selected, only show its trail
+    if (hasSelection && entityId !== selectedId) continue;
     data.push({ entityId, path, mode });
   }
 
@@ -178,12 +166,17 @@ export function createTrailLayer(
     getPath: (d) => d.path,
     getColor: (d) => {
       const [r, g, b] = MODE_COLORS[d.mode];
+      // Brighter trail for selected vehicle
+      if (hasSelection && d.entityId === selectedId) return [r, g, b, 200];
       return [r, g, b, 100];
     },
-    getWidth: (d) => TRAIL_WIDTH[d.mode],
+    getWidth: (d) => {
+      if (hasSelection && d.entityId === selectedId) return TRAIL_WIDTH[d.mode] * 2;
+      return TRAIL_WIDTH[d.mode];
+    },
     widthUnits: "pixels" as const,
     widthMinPixels: 1,
-    widthMaxPixels: 6,
+    widthMaxPixels: 8,
     capRounded: true,
     jointRounded: true,
     pickable: false,
