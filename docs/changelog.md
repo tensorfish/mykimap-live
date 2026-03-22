@@ -23,3 +23,5 @@
 - Docs: VitePress site with Mermaid diagrams
 - `.memory/`: GTFS-RT feed analysis, implementation plan
 - `AGENTS.md`: AI agent instructions
+- `.memory/future-time-machine.md`: Time machine design — Parquet snapshots + DuckDB-WASM playback
+- Architectural seams preserved for future playback: `WorldState` as single interchange format, `applyTick()` source-agnostic, `PollResult` serializable

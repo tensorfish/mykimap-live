@@ -49,7 +49,7 @@ The server is authoritative — clients render exactly what the server sends. Th
 
 ### Key design decisions
 
-- **No database.** Vehicle state is ephemeral in-memory, replaced every poll.
+- **No database — for now.** Vehicle state is ephemeral in-memory. The architecture preserves seams for a future [time machine feature](/data-flow#future-time-machine): server writes daily Parquet snapshot files, client queries them with DuckDB-WASM for historical playback.
 - **No REST API.** All client communication is one-way WebSocket broadcast.
 - **Route-snapped interpolation.** Vehicles follow their GTFS route shape polyline — actual road/track/tram line geometry. No cutting through buildings. Falls back to straight-line for unmatched vehicles.
 - **GTFS Schedule shapes loaded at boot.** The static GTFS ZIP (~191 MB) is downloaded once, cached, and shapes + trips are extracted to build an in-memory `trip_id → shape polyline` index.

@@ -21,6 +21,7 @@ These are the source of truth. The code implements what these documents describe
 - **Follow the state machines.** Server and client state transitions are strictly defined. Don't add transitions without updating `.memory/state-transitions.md` first.
 - **No frameworks on the client.** The client uses vanilla TypeScript, TanStack Store, deck.gl pure JS API, and Mapbox GL JS. No React, no Vue, no Svelte.
 - **Bun everywhere.** Runtime, package manager, test runner, build tool. Don't introduce Node-specific APIs or npm/yarn/pnpm.
+- **Preserve the architectural seams.** `WorldState` is the single interchange format. `applyTick()` must accept any `WorldState` regardless of source. `PollResult` must stay serializable. These exist to support the future time machine feature. See `.memory/future-time-machine.md`.
 
 ## What you must maintain
 
@@ -31,7 +32,8 @@ These are living documents that describe the system as it is, not as it was.
 | File | Describes | Update when... |
 |---|---|---|
 | `overview.md` | What the product is, who it's for, scale, data sources | Scope changes, new modes added, new data sources |
-| `tech-stack.md` | Architecture, dependencies, data flow, design constraints | Any dependency added/removed, any architectural change |
+| `tech-stack.md` | Architecture, dependencies, data flow, design constraints, architectural seams | Any dependency added/removed, any architectural change |
+| `future-time-machine.md` | Time machine design: Parquet snapshots, DuckDB-WASM playback, architectural seams | Any change to `WorldState`, `applyTick()`, `PollResult`, or the poll/broadcast pipeline |
 | `state-transitions.md` | State machines, valid transitions, timing constants, log format | Any state added/removed, any transition changed, any timing constant changed |
 | `gtfs-vic.md` | Feed structure, field availability, endpoints, auth, rate limits, shapes, colors | Any feed-related discovery or change |
 

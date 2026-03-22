@@ -92,10 +92,19 @@ Every frontend receives the same broadcast at the same server tick. Clients don'
 
 ## What's intentionally absent
 
-- **No database.** Vehicle state is ephemeral — it lives in memory on the server and is replaced every poll.
-- **No REST API.** All client-server communication is WebSocket.
+- **No database — for now.** Vehicle state is ephemeral in-memory. Future: server will write snapshots to daily Parquet files, client will query them with DuckDB-WASM for historical playback. See [future-time-machine.md](future-time-machine.md).
+- **No REST API.** All live client-server communication is WebSocket. Future: a `/data/snapshots/` static file endpoint for Parquet files.
 - **No authentication.** This is a public visualisation tool.
 - **No UI framework.** Vanilla TS + TanStack Store + direct DOM. No React, no virtual DOM.
+
+## Architectural seams (must preserve)
+
+These invariants exist to support the future time machine feature. Do not violate them.
+
+1. **`PollResult` is a pure serializable data object.** No side effects, no socket references. It can be written to disk.
+2. **`WorldState` is the single interchange format.** Both live WebSocket ticks and future historical playback must produce the same shape.
+3. **`applyTick()` accepts any `WorldState` regardless of source.** The rendering pipeline must not care whether data is live or replayed.
+4. **Client rendering has no dependency on WebSocket liveness.** Layers render from store state, not from the connection.
 
 ## Data Constraints (from live feed analysis)
 
