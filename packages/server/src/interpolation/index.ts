@@ -1,6 +1,10 @@
 import type { VehiclePosition, ShapePolyline } from "../types.js";
 import { config } from "../config.js";
-import { haversineDistance, calculateBearing, projectForward as projectForwardFallback } from "./geo.js";
+import {
+  haversineDistance,
+  calculateBearing,
+  projectForward as projectForwardFallback,
+} from "./geo.js";
 import {
   getShapeForTrip,
   snapToShape,
@@ -8,129 +12,164 @@ import {
   shapeLength,
 } from "../shapes/index.js";
 
-/**
- * Previous snapshot, keyed by entityId.
- * Tracks the vehicle's last known position plus its distance
- * along the matched shape polyline.
- */
-interface PreviousState {
-  lat: number;
-  lon: number;
-  timestamp: number;
+// ── Per-vehicle tracking state ──
+
+interface VehicleState {
+  /** Position from the most recent poll (the "target") */
+  targetLat: number;
+  targetLon: number;
+  targetShapeDist: number;
+  targetTimestamp: number;
+
+  /** Position from the poll before that (the "origin") */
+  originLat: number;
+  originLon: number;
+  originShapeDist: number;
+  originTimestamp: number;
+
+  /** Calculated values */
   bearing: number;
   speed: number;
-  shapeDist: number;
   shapeId: string;
+
+  /** When the target was received (wall clock ms) */
+  targetReceivedAt: number;
+
+  /** Estimated travel time between origin and target (ms) */
+  travelTimeMs: number;
 }
 
-const previousPositions = new Map<string, PreviousState>();
+const vehicleStates = new Map<string, VehicleState>();
 
 /**
  * Process a new batch of vehicle positions from a poll.
- * - Snaps each vehicle onto its GTFS route shape
- * - Calculates speed from distance deltas along the shape
- * - Infers bearing for trams from the shape direction
- * - Marks stale vehicles
+ *
+ * For each vehicle, the current position becomes the new "target"
+ * and the previous target becomes the "origin". Between broadcasts,
+ * vehicles are interpolated from origin → target along the shape,
+ * then projected forward past the target using calculated speed.
+ *
+ * This means the vehicle smoothly traverses the gap between two
+ * known positions along the road/track — no teleporting.
  */
 export function processSnapshot(
   vehicles: VehiclePosition[],
   headerTimestamp: number
 ): VehiclePosition[] {
   const now = headerTimestamp || Math.floor(Date.now() / 1000);
+  const nowMs = Date.now();
 
   for (const v of vehicles) {
-    const prev = previousPositions.get(v.entityId);
+    const prev = vehicleStates.get(v.entityId);
     const age = now - v.timestamp;
 
     v.stale = age * 1000 > config.staleVehicleThresholdMs;
 
     // Try to match vehicle to a shape polyline
     const shape = getShapeForTrip(v.tripId);
+    let snapDist = -1;
 
     if (shape && shape.length >= 2) {
-      // Snap current position onto the shape
-      const snapDist = snapToShape(v.latitude, v.longitude, shape);
+      snapDist = snapToShape(v.latitude, v.longitude, shape);
       v.shapeDistTraveled = snapDist;
-      v.shapeId = v.tripId; // We key by tripId for lookup
+      v.shapeId = v.tripId;
 
-      // Place the vehicle exactly on the shape line
+      // Snap the reported position onto the shape
       const snapped = sampleShape(shape, snapDist);
       if (snapped) {
         v.latitude = snapped.lat;
         v.longitude = snapped.lon;
       }
 
-      if (prev && prev.shapeDist >= 0) {
-        const dt = v.timestamp - prev.timestamp;
-
-        if (dt > 0) {
-          // Calculate speed from distance traveled along the shape
-          let distDelta = snapDist - prev.shapeDist;
-
-          // Handle vehicles that might have wrapped around (end → start of shape)
-          // or jumped due to shape mismatch — cap to reasonable distance
-          if (distDelta < 0) {
-            // Vehicle might be going the opposite direction on the shape,
-            // or on a return trip. Use absolute value if small, else recalculate.
-            distDelta = Math.abs(distDelta);
-          }
-
-          // Sanity check: cap speed at ~120 km/h for trains, ~80 km/h for others
-          const maxSpeed = v.mode === "metro" || v.mode === "vline" ? 33.3 : 22.2;
-          const calcSpeed = distDelta / dt;
-          v.speed = Math.min(calcSpeed, maxSpeed);
-
-          // Derive bearing from the shape direction at this point
-          v.bearing = bearingAtShapeDist(shape, snapDist);
-        }
-      } else if (prev) {
-        // First time we got a shape match — compute speed from haversine as before
-        const dt = v.timestamp - prev.timestamp;
-        if (dt > 0) {
-          const dist = haversineDistance(prev.lat, prev.lon, v.latitude, v.longitude);
-          v.speed = dist / dt;
-        }
-        v.bearing = bearingAtShapeDist(shape, snapDist);
-      }
+      v.bearing = bearingAtShapeDist(shape, snapDist);
     } else {
-      // No shape available — fall back to straight-line calc
       v.shapeDistTraveled = -1;
       v.shapeId = "";
-
-      if (prev) {
-        const dt = v.timestamp - prev.timestamp;
-
-        if (dt > 0) {
-          const dist = haversineDistance(prev.lat, prev.lon, v.latitude, v.longitude);
-          v.speed = dist / dt;
-
-          if (v.bearing === 0 && dist > 5) {
-            v.bearing = calculateBearing(prev.lat, prev.lon, v.latitude, v.longitude);
-          }
-        } else {
-          v.speed = prev.speed;
-          if (v.bearing === 0) v.bearing = prev.bearing;
-        }
-      }
     }
 
-    // Store for next diff
-    previousPositions.set(v.entityId, {
-      lat: v.latitude,
-      lon: v.longitude,
-      timestamp: v.timestamp,
-      bearing: v.bearing,
-      speed: v.speed,
-      shapeDist: v.shapeDistTraveled,
-      shapeId: v.shapeId,
-    });
+    if (prev) {
+      const dt = v.timestamp - prev.targetTimestamp;
+
+      if (dt > 0) {
+        // Calculate speed
+        let dist: number;
+        if (snapDist >= 0 && prev.targetShapeDist >= 0) {
+          dist = Math.abs(snapDist - prev.targetShapeDist);
+        } else {
+          dist = haversineDistance(
+            prev.targetLat,
+            prev.targetLon,
+            v.latitude,
+            v.longitude
+          );
+        }
+
+        const maxSpeed =
+          v.mode === "metro" || v.mode === "vline" ? 33.3 : 22.2;
+        v.speed = Math.min(dist / dt, maxSpeed);
+
+        // Infer bearing for no-shape vehicles
+        if (!shape && v.bearing === 0 && dist > 5) {
+          v.bearing = calculateBearing(
+            prev.targetLat,
+            prev.targetLon,
+            v.latitude,
+            v.longitude
+          );
+        }
+      } else {
+        v.speed = prev.speed;
+        if (v.bearing === 0) v.bearing = prev.bearing;
+      }
+
+      // Promote: previous target becomes origin, new position becomes target
+      vehicleStates.set(v.entityId, {
+        originLat: prev.targetLat,
+        originLon: prev.targetLon,
+        originShapeDist: prev.targetShapeDist,
+        originTimestamp: prev.targetTimestamp,
+
+        targetLat: v.latitude,
+        targetLon: v.longitude,
+        targetShapeDist: snapDist,
+        targetTimestamp: v.timestamp,
+
+        bearing: v.bearing,
+        speed: v.speed,
+        shapeId: v.shapeId,
+        targetReceivedAt: nowMs,
+        travelTimeMs: Math.max(
+          (v.timestamp - prev.targetTimestamp) * 1000,
+          config.pollIntervalMs
+        ),
+      });
+    } else {
+      // First sighting — no origin yet, can't interpolate
+      vehicleStates.set(v.entityId, {
+        originLat: v.latitude,
+        originLon: v.longitude,
+        originShapeDist: snapDist,
+        originTimestamp: v.timestamp,
+
+        targetLat: v.latitude,
+        targetLon: v.longitude,
+        targetShapeDist: snapDist,
+        targetTimestamp: v.timestamp,
+
+        bearing: v.bearing,
+        speed: 0,
+        shapeId: v.shapeId,
+        targetReceivedAt: nowMs,
+        travelTimeMs: config.pollIntervalMs,
+      });
+    }
   }
 
-  // Remove entities no longer in the feed
+  // Clean up departed vehicles
   const currentIds = new Set(vehicles.map((v) => v.entityId));
-  for (const key of previousPositions.keys()) {
+  for (const key of vehicleStates.keys()) {
     if (!currentIds.has(key)) {
-      previousPositions.delete(key);
+      vehicleStates.delete(key);
     }
   }
 
@@ -138,78 +177,109 @@ export function processSnapshot(
 }
 
 /**
- * Interpolate all vehicle positions forward by `deltaMs` milliseconds.
+ * Interpolate all vehicle positions for the current moment.
  *
- * For shape-matched vehicles: advance along the polyline.
- * For unmatched vehicles: project forward by bearing (old behavior).
- * Stale and stationary vehicles are not moved.
+ * For each vehicle:
+ *  1. Calculate how far through the origin→target journey we are (t = 0..1)
+ *  2. If t < 1: interpolate along the shape between origin and target
+ *  3. If t >= 1: project forward past the target using speed + shape
+ *
+ * This fills the gap between two poll positions smoothly along the
+ * actual road/track, instead of teleporting.
  */
 export function interpolate(
   vehicles: VehiclePosition[],
-  deltaMs: number
+  _deltaMs: number
 ): VehiclePosition[] {
-  const deltaSec = deltaMs / 1000;
+  const nowMs = Date.now();
 
   return vehicles.map((v) => {
-    if (v.stale || v.speed < 0.5) return v;
+    if (v.stale) return v;
 
-    const advanceM = v.speed * deltaSec;
+    const state = vehicleStates.get(v.entityId);
+    if (!state || state.speed < 0.5) return v;
 
-    // Shape-following interpolation
-    if (v.shapeDistTraveled >= 0 && v.shapeId) {
-      const shape = getShapeForTrip(v.tripId);
+    // How far through the origin→target journey are we? (0 to 1+)
+    const elapsed = nowMs - state.targetReceivedAt;
+    const t = elapsed / state.travelTimeMs;
 
-      if (shape && shape.length >= 2) {
-        const newDist = v.shapeDistTraveled + advanceM;
-        const total = shapeLength(shape);
+    const shape = state.shapeId ? getShapeForTrip(v.tripId) : undefined;
 
-        // Clamp to shape — don't overshoot past the terminus
-        const clampedDist = Math.min(newDist, total);
-        const pos = sampleShape(shape, clampedDist);
+    // ── Shape-following interpolation ──
+    if (
+      shape &&
+      shape.length >= 2 &&
+      state.originShapeDist >= 0 &&
+      state.targetShapeDist >= 0
+    ) {
+      const total = shapeLength(shape);
+      let dist: number;
 
-        if (pos) {
-          return {
-            ...v,
-            latitude: pos.lat,
-            longitude: pos.lon,
-            shapeDistTraveled: clampedDist,
-            bearing: bearingAtShapeDist(shape, clampedDist),
-          };
-        }
+      if (t <= 1) {
+        // Still catching up to the target — lerp along shape
+        dist =
+          state.originShapeDist +
+          t * (state.targetShapeDist - state.originShapeDist);
+      } else {
+        // Past the target — project forward from target
+        const overshootSec = ((t - 1) * state.travelTimeMs) / 1000;
+        dist = state.targetShapeDist + state.speed * overshootSec;
+      }
+
+      dist = Math.max(0, Math.min(dist, total));
+      const pos = sampleShape(shape, dist);
+
+      if (pos) {
+        return {
+          ...v,
+          latitude: pos.lat,
+          longitude: pos.lon,
+          shapeDistTraveled: dist,
+          bearing: bearingAtShapeDist(shape, dist),
+        };
       }
     }
 
-    // Fallback: straight-line projection (no shape data)
-    if (v.bearing === 0) return v;
+    // ── Straight-line fallback ──
+    if (state.bearing === 0) return v;
 
-    const [newLat, newLon] = projectForwardFallback(v.latitude, v.longitude, v.bearing, advanceM);
-
-    return {
-      ...v,
-      latitude: newLat,
-      longitude: newLon,
-    };
+    if (t <= 1) {
+      // Lerp between origin and target
+      return {
+        ...v,
+        latitude:
+          state.originLat + t * (state.targetLat - state.originLat),
+        longitude:
+          state.originLon + t * (state.targetLon - state.originLon),
+      };
+    } else {
+      // Project forward past target
+      const overshootSec = ((t - 1) * state.travelTimeMs) / 1000;
+      const advanceM = state.speed * overshootSec;
+      const [newLat, newLon] = projectForwardFallback(
+        state.targetLat,
+        state.targetLon,
+        state.bearing,
+        advanceM
+      );
+      return { ...v, latitude: newLat, longitude: newLon };
+    }
   });
 }
 
-/**
- * Get the bearing (direction of travel) at a given distance along a shape.
- * Looks at the shape segment containing that distance.
- */
+// ── Helpers ──
+
 function bearingAtShapeDist(shape: ShapePolyline, dist: number): number {
   if (shape.length < 2) return 0;
 
-  // Find the segment
   for (let i = 0; i < shape.length - 1; i++) {
     const a = shape[i]!;
     const b = shape[i + 1]!;
-
     if (dist >= a.dist && dist <= b.dist) {
       return calculateBearing(a.lat, a.lon, b.lat, b.lon);
     }
   }
 
-  // Past the end — use last segment
   const a = shape[shape.length - 2]!;
   const b = shape[shape.length - 1]!;
   return calculateBearing(a.lat, a.lon, b.lat, b.lon);
