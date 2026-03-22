@@ -44,8 +44,8 @@ const vehicleStates = new Map<string, VehicleState>();
 
 // ── Server-side trail history ──
 
-/** ~15 seconds of trail at 1 tick/s — enough to show direction, not the whole journey */
-const MAX_TRAIL_POINTS = 15;
+/** ~50 seconds of trail at 1 tick/s */
+const MAX_TRAIL_POINTS = 50;
 
 /** Per-vehicle trail: entityId → array of [lon, lat] (most recent last) */
 const vehicleTrails = new Map<string, Array<[number, number]>>();
@@ -120,7 +120,8 @@ export function processSnapshot(
         v.longitude = snapped.lon;
       }
 
-      v.bearing = bearingAtShapeDist(shape, snapDist);
+      // Bearing will be computed from trail in interpolate(). Don't use
+      // shape bearing here — shapes are unidirectional and may be backwards.
     } else {
       v.shapeDistTraveled = -1;
       v.shapeId = "";
@@ -286,7 +287,7 @@ export function interpolate(
           latitude: pos.lat,
           longitude: pos.lon,
           shapeDistTraveled: dist,
-          bearing: bearingAtShapeDist(shape, dist),
+          bearing: bearingFromTrail(v.entityId) || v.bearing,
         };
       }
     }
@@ -298,7 +299,7 @@ export function interpolate(
       const lat = state.originLat + t * (state.targetLat - state.originLat);
       const lon = state.originLon + t * (state.targetLon - state.originLon);
       appendTrail(v.entityId, lon, lat);
-      return { ...v, latitude: lat, longitude: lon };
+      return { ...v, latitude: lat, longitude: lon, bearing: bearingFromTrail(v.entityId) || v.bearing };
     } else {
       const overshootSec = ((t - 1) * state.travelTimeMs) / 1000;
       const advanceM = state.speed * overshootSec;
@@ -309,25 +310,26 @@ export function interpolate(
         advanceM
       );
       appendTrail(v.entityId, newLon, newLat);
-      return { ...v, latitude: newLat, longitude: newLon };
+      return { ...v, latitude: newLat, longitude: newLon, bearing: bearingFromTrail(v.entityId) || v.bearing };
     }
   });
 }
 
 // ── Helpers ──
 
-function bearingAtShapeDist(shape: ShapePolyline, dist: number): number {
-  if (shape.length < 2) return 0;
+/**
+ * Compute bearing from the vehicle's trail (last two points).
+ * This is the ground truth of travel direction — unlike shape bearing,
+ * it's correct regardless of whether the vehicle is traveling forward
+ * or backward along the shape polyline.
+ */
+function bearingFromTrail(entityId: string): number {
+  const trail = vehicleTrails.get(entityId);
+  if (!trail || trail.length < 2) return 0;
 
-  for (let i = 0; i < shape.length - 1; i++) {
-    const a = shape[i]!;
-    const b = shape[i + 1]!;
-    if (dist >= a.dist && dist <= b.dist) {
-      return calculateBearing(a.lat, a.lon, b.lat, b.lon);
-    }
-  }
+  const prev = trail[trail.length - 2]!;
+  const curr = trail[trail.length - 1]!;
 
-  const a = shape[shape.length - 2]!;
-  const b = shape[shape.length - 1]!;
-  return calculateBearing(a.lat, a.lon, b.lat, b.lon);
+  // trail stores [lon, lat]
+  return calculateBearing(prev[1], prev[0], curr[1], curr[0]);
 }
