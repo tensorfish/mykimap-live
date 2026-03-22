@@ -9,33 +9,38 @@ import {
   shapeLength,
 } from "../shapes/index.js";
 
-// ── Per-vehicle state ──
+// ── Playback buffer ──
 //
-// Architecture: single-layer prediction (see .memory/ui-stabilizing.md)
-// - shapeDist is the BASELINE — advanced by exactly 1s per broadcast beat
-// - On fresh poll, shapeDist resets to ground truth (snapped GPS)
-// - No elapsed-based accumulation — no overshoot possible
+// Architecture: 30s delayed playback (see .memory/ui-stabilizing.md)
+//
+// Instead of predicting the future, we serve data from 30s ago.
+// Since the feed refreshes every ~30s, by the time we serve a position
+// to the client, we already have the NEXT position.
+// The server interpolates between two KNOWN positions — no speculation.
+//
+// Result: zero prediction error, zero overshoot, zero snap-back.
 
-interface VehicleState {
-  /** Current baseline distance along shape (advanced each beat, reset on poll) */
-  shapeDist: number;
-  /** Ground truth shapeDist from last fresh poll */
-  lastPollShapeDist: number;
-  /** Last poll timestamp (for speed calculation) */
-  lastPollTimestamp: number;
-  /** Locked shape reference — chosen on first sighting, never re-picked */
-  shape: ShapePolyline | null;
-  /** Speed in m/s from consecutive polls */
-  speed: number;
-  /** +1 or -1 along shape polyline */
-  direction: number;
-  /** Bearing from shape geometry + direction */
-  bearing: number;
+const PLAYBACK_DELAY_S = 30;
+const MAX_BUFFER_AGE_S = 90; // keep 90s of history
+
+interface Snapshot {
+  /** Feed header timestamp (POSIX seconds) */
+  timestamp: number;
+  /** Vehicles keyed by entityId for fast lookup */
+  vehicles: Map<string, VehiclePosition>;
 }
 
-const vehicleStates = new Map<string, VehicleState>();
+const snapshotBuffer: Snapshot[] = [];
 
-// ── Trail history (from poll data only — never from interpolation) ──
+// ── Per-vehicle persistent state (shape locking, trail) ──
+
+interface VehicleShapeState {
+  shape: ShapePolyline | null;
+}
+
+const vehicleShapes = new Map<string, VehicleShapeState>();
+
+// ── Trail history (from poll data only) ──
 
 const TRAIL_LENGTH: Record<TransportMode, number> = {
   metro: 30, vline: 30, tram: 60, bus: 80,
@@ -65,31 +70,17 @@ export function getTrails(): Record<string, Array<[number, number]>> {
 
 // ── Shape helpers ──
 
-/** Find bearing at a distance along a shape. Clean search-then-fallback (Step A fix). */
-function bearingAtDist(
-  shape: ShapePolyline,
-  dist: number,
-  direction: number
-): number {
+function bearingAtDist(shape: ShapePolyline, dist: number, direction: number): number {
   if (shape.length < 2) return 0;
 
-  // Default: first segment
-  let a = shape[0]!;
-  let b = shape[1]!;
-
-  // Search for the segment containing this distance
+  let a = shape[0]!, b = shape[1]!;
   for (let i = 0; i < shape.length - 1; i++) {
     if (dist >= shape[i]!.dist && dist <= shape[i + 1]!.dist) {
-      a = shape[i]!;
-      b = shape[i + 1]!;
-      break;
+      a = shape[i]!; b = shape[i + 1]!; break;
     }
   }
-
-  // If past the end, use last segment
   if (dist > shape[shape.length - 1]!.dist) {
-    a = shape[shape.length - 2]!;
-    b = shape[shape.length - 1]!;
+    a = shape[shape.length - 2]!; b = shape[shape.length - 1]!;
   }
 
   let bearing = calculateBearing(a.lat, a.lon, b.lat, b.lon);
@@ -97,28 +88,15 @@ function bearingAtDist(
   return bearing;
 }
 
-/**
- * Pick the best shape for a vehicle on first sighting.
- * Tries trip_id match first. Falls back to route_id with dual-direction
- * selection — snaps to both dir0 and dir1, picks whichever is closest.
- */
-function pickShape(
-  tripId: string,
-  routeId: string,
-  lat: number,
-  lon: number
-): ShapePolyline | null {
-  // Primary: exact trip_id match
+function pickShape(tripId: string, routeId: string, lat: number, lon: number): ShapePolyline | null {
   const tripShape = getShapeForTrip(tripId);
   if (tripShape && tripShape.length >= 2) return tripShape;
 
-  // Fallback: route_id with dual-direction selection
   const { dir0, dir1 } = getShapesForRoute(routeId);
   if (!dir0 && !dir1) return null;
   if (dir0 && !dir1) return dir0;
   if (!dir0 && dir1) return dir1;
 
-  // Both exist — snap to each, pick closest
   const snap0 = snapToShape(lat, lon, dir0!);
   const pos0 = sampleShape(dir0!, snap0);
   const d0 = pos0 ? haversineDistance(lat, lon, pos0.lat, pos0.lon) : Infinity;
@@ -130,115 +108,60 @@ function pickShape(
   return d0 <= d1 ? dir0! : dir1!;
 }
 
-// ── Process a fresh poll ──
+function getOrPickShape(entityId: string, tripId: string, routeId: string, lat: number, lon: number): ShapePolyline | null {
+  const existing = vehicleShapes.get(entityId);
+  if (existing) return existing.shape;
+
+  const shape = pickShape(tripId, routeId, lat, lon);
+  vehicleShapes.set(entityId, { shape });
+  return shape;
+}
+
+// ── Process a fresh poll → snap + store in buffer ──
 
 export function processSnapshot(
   vehicles: VehiclePosition[],
   headerTimestamp: number
 ): VehiclePosition[] {
-  const now = headerTimestamp || Math.floor(Date.now() / 1000);
 
+  // Snap each vehicle to its shape
   for (const v of vehicles) {
-    const prev = vehicleStates.get(v.entityId);
-    const age = now - v.timestamp;
+    const age = headerTimestamp - v.timestamp;
     v.stale = age * 1000 > config.staleVehicleThresholdMs;
 
-    // Get or pick shape (locked on first sighting)
-    const shape = prev?.shape ?? pickShape(v.tripId, v.routeId, v.latitude, v.longitude);
+    const shape = getOrPickShape(v.entityId, v.tripId, v.routeId, v.latitude, v.longitude);
 
     if (shape && shape.length >= 2) {
       const snapDist = snapToShape(v.latitude, v.longitude, shape);
       const snapped = sampleShape(shape, snapDist);
-      if (snapped) {
-        v.latitude = snapped.lat;
-        v.longitude = snapped.lon;
-      }
+      if (snapped) { v.latitude = snapped.lat; v.longitude = snapped.lon; }
       v.shapeDistTraveled = snapDist;
       v.shapeId = v.tripId || v.routeId;
-
-      if (prev) {
-        const dt = v.timestamp - prev.lastPollTimestamp;
-        if (dt > 0) {
-          // Fresh data — calculate speed + direction from shape distance delta
-          const shapeDelta = snapDist - prev.lastPollShapeDist;
-          const dist = Math.abs(shapeDelta);
-          const direction = shapeDelta >= 0 ? 1 : -1;
-          const maxSpeed = v.mode === "metro" || v.mode === "vline" ? 33.3 : 22.2;
-          const speed = Math.min(dist / dt, maxSpeed);
-          const bearing = bearingAtDist(shape, snapDist, direction);
-
-          // Trail: append from snapped poll position (ground truth)
-          if (!v.stale) appendTrail(v.entityId, v.longitude, v.latitude, v.mode);
-
-          vehicleStates.set(v.entityId, {
-            shapeDist: snapDist, // reset baseline to ground truth
-            lastPollShapeDist: snapDist,
-            lastPollTimestamp: v.timestamp,
-            shape,
-            speed,
-            direction,
-            bearing,
-          });
-
-          v.speed = speed;
-          v.bearing = bearing;
-        } else {
-          // Duplicate poll — carry forward
-          v.speed = prev.speed;
-          v.bearing = prev.bearing;
-        }
-      } else {
-        // First sighting — no speed yet
-        const bearing = bearingAtDist(shape, snapDist, 1);
-        if (!v.stale) appendTrail(v.entityId, v.longitude, v.latitude, v.mode);
-
-        vehicleStates.set(v.entityId, {
-          shapeDist: snapDist,
-          lastPollShapeDist: snapDist,
-          lastPollTimestamp: v.timestamp,
-          shape,
-          speed: 0,
-          direction: 1,
-          bearing,
-        });
-
-        v.speed = 0;
-        v.bearing = bearing;
-      }
     } else {
-      // No shape — straight-line fallback
       v.shapeDistTraveled = -1;
       v.shapeId = "";
-
-      if (prev && !prev.shape) {
-        const dt = v.timestamp - prev.lastPollTimestamp;
-        if (dt > 0) {
-          const dist = haversineDistance(prev.shapeDist === -1 ? 0 : prev.lastPollShapeDist, 0, v.latitude, v.longitude);
-          // Use raw position delta for bearing
-          v.bearing = calculateBearing(
-            vehicleStates.get(v.entityId)?.bearing ? prev.lastPollShapeDist : v.latitude,
-            0, v.latitude, v.longitude
-          );
-          v.speed = 0; // Can't interpolate without shape
-        }
-      }
-
-      vehicleStates.set(v.entityId, {
-        shapeDist: -1,
-        lastPollShapeDist: -1,
-        lastPollTimestamp: v.timestamp,
-        shape: null,
-        speed: 0,
-        direction: 1,
-        bearing: v.bearing,
-      });
     }
+
+    // Trail: append ground-truth snapped position
+    if (!v.stale) appendTrail(v.entityId, v.longitude, v.latitude, v.mode);
   }
 
-  // Clean up departed
+  // Store in buffer
+  const vehicleMap = new Map<string, VehiclePosition>();
+  for (const v of vehicles) vehicleMap.set(v.entityId, { ...v });
+
+  snapshotBuffer.push({ timestamp: headerTimestamp, vehicles: vehicleMap });
+
+  // Trim old snapshots
+  const cutoff = headerTimestamp - MAX_BUFFER_AGE_S;
+  while (snapshotBuffer.length > 0 && snapshotBuffer[0]!.timestamp < cutoff) {
+    snapshotBuffer.shift();
+  }
+
+  // Clean up departed vehicle shapes
   const currentIds = new Set(vehicles.map((v) => v.entityId));
-  for (const key of vehicleStates.keys()) {
-    if (!currentIds.has(key)) vehicleStates.delete(key);
+  for (const key of vehicleShapes.keys()) {
+    if (!currentIds.has(key)) vehicleShapes.delete(key);
   }
   for (const key of vehicleTrails.keys()) {
     if (!currentIds.has(key)) vehicleTrails.delete(key);
@@ -247,43 +170,105 @@ export function processSnapshot(
   return vehicles;
 }
 
-// ── Interpolate for broadcast (1s beat advancement) ──
+// ── Interpolate for broadcast (30s delayed playback) ──
 //
-// Advances each vehicle along its shape by exactly speed × 1s.
-// The shapeDist baseline is MUTATED — each beat moves it forward.
-// On the next fresh poll, it resets to ground truth.
-// Trail is NOT appended here — only in processSnapshot.
+// Finds two snapshots straddling (now - 30s), lerps between them.
+// Every position is between two known ground-truth points.
+// Zero prediction. Zero overshoot. Zero snap-back.
 
 export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
-  return vehicles.map((v) => {
-    if (v.stale) return v;
+  if (snapshotBuffer.length === 0) return vehicles;
 
-    const state = vehicleStates.get(v.entityId);
-    if (!state || state.speed < 0.5 || !state.shape) return v;
+  const nowS = Math.floor(Date.now() / 1000);
+  const playbackTime = nowS - PLAYBACK_DELAY_S;
 
-    const shape = state.shape;
-    const total = shapeLength(shape);
+  // Find snapshots A (before) and B (after) straddling playbackTime
+  let snapA: Snapshot | null = null;
+  let snapB: Snapshot | null = null;
 
-    // Advance exactly 1s of movement
-    const advance = state.speed * 1.0 * state.direction;
-    let newDist = state.shapeDist + advance;
-    newDist = Math.max(0, Math.min(newDist, total));
+  for (let i = 0; i < snapshotBuffer.length - 1; i++) {
+    if (snapshotBuffer[i]!.timestamp <= playbackTime && snapshotBuffer[i + 1]!.timestamp > playbackTime) {
+      snapA = snapshotBuffer[i]!;
+      snapB = snapshotBuffer[i + 1]!;
+      break;
+    }
+  }
 
-    // Update baseline for next beat
-    state.shapeDist = newDist;
+  // Not enough buffer yet — serve latest snapshot directly (warmup period)
+  if (!snapA || !snapB) {
+    const latest = snapshotBuffer[snapshotBuffer.length - 1]!;
+    return [...latest.vehicles.values()].sort((a, b) =>
+      a.entityId < b.entityId ? -1 : a.entityId > b.entityId ? 1 : 0
+    );
+  }
 
-    // Sample position + bearing from shape
-    const pos = sampleShape(shape, newDist);
-    if (!pos) return v;
+  // Lerp factor: 0 = at A, 1 = at B
+  const span = snapB.timestamp - snapA.timestamp;
+  const t = span > 0 ? (playbackTime - snapA.timestamp) / span : 0;
 
-    const bearing = bearingAtDist(shape, newDist, state.direction);
+  const result: VehiclePosition[] = [];
 
-    return {
-      ...v,
-      latitude: pos.lat,
-      longitude: pos.lon,
-      bearing,
-      shapeDistTraveled: newDist,
-    };
-  });
+  // Interpolate each vehicle that exists in both snapshots
+  for (const [entityId, vB] of snapB.vehicles) {
+    const vA = snapA.vehicles.get(entityId);
+    if (!vA) {
+      // Vehicle appeared in B but not in A — show at B's position
+      result.push({ ...vB });
+      continue;
+    }
+
+    const shape = getOrPickShape(entityId, vB.tripId, vB.routeId, vB.latitude, vB.longitude);
+
+    if (shape && shape.length >= 2 && vA.shapeDistTraveled >= 0 && vB.shapeDistTraveled >= 0) {
+      // Lerp along shape between two known positions
+      const distA = vA.shapeDistTraveled;
+      const distB = vB.shapeDistTraveled;
+      const lerpDist = distA + t * (distB - distA);
+      const clampedDist = Math.max(0, Math.min(lerpDist, shapeLength(shape)));
+
+      const pos = sampleShape(shape, clampedDist);
+      if (pos) {
+        const direction = distB >= distA ? 1 : -1;
+        const bearing = bearingAtDist(shape, clampedDist, direction);
+        const speed = span > 0 ? Math.abs(distB - distA) / span : 0;
+
+        // Trail: append from shape-interpolated position.
+        // These are lerps between two known ground-truth points ON the shape,
+        // not predictions — so the trail follows the actual route geometry.
+        if (!vB.stale && speed >= 0.5) {
+          appendTrail(entityId, pos.lon, pos.lat, vB.mode);
+        }
+
+        result.push({
+          ...vB,
+          latitude: pos.lat,
+          longitude: pos.lon,
+          bearing,
+          speed,
+          shapeDistTraveled: clampedDist,
+          stale: vB.stale,
+        });
+        continue;
+      }
+    }
+
+    // Fallback: straight-line lerp between raw positions
+    const lat = vA.latitude + t * (vB.latitude - vA.latitude);
+    const lon = vA.longitude + t * (vB.longitude - vA.longitude);
+    if (!vB.stale && vB.speed >= 0.5) {
+      appendTrail(entityId, lon, lat, vB.mode);
+    }
+    result.push({
+      ...vB,
+      latitude: lat,
+      longitude: lon,
+      bearing: vB.bearing,
+      speed: vB.speed,
+    });
+  }
+
+  // Sort for stable client rendering
+  result.sort((a, b) => a.entityId < b.entityId ? -1 : a.entityId > b.entityId ? 1 : 0);
+
+  return result;
 }
