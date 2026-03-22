@@ -6,9 +6,9 @@ import { logTransition } from "./logger.js";
  * See .memory/state-transitions.md for the full diagram.
  */
 const VALID_TRANSITIONS: Record<ServerState, ServerState[]> = {
-  BOOT: ["INITIALIZING"],
-  INITIALIZING: ["AWAITING_FIRST_POLL", "FATAL"],
-  AWAITING_FIRST_POLL: ["RUNNING", "FATAL"],
+  BOOT: ["INITIALIZING", "SHUTTING_DOWN"],
+  INITIALIZING: ["AWAITING_FIRST_POLL", "FATAL", "SHUTTING_DOWN"],
+  AWAITING_FIRST_POLL: ["RUNNING", "FATAL", "SHUTTING_DOWN"],
   RUNNING: ["DEGRADED", "SHUTTING_DOWN"],
   DEGRADED: ["RUNNING", "STALE", "SHUTTING_DOWN"],
   STALE: ["RUNNING", "SHUTTING_DOWN"],
