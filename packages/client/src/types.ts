@@ -50,6 +50,8 @@ export interface ServiceAlert {
 export interface WorldState {
   timestamp: number;
   vehicles: VehiclePosition[];
+  /** Server-side trails: entityId → array of [lon, lat] (most recent last) */
+  trails: Record<string, Array<[number, number]>>;
   alerts: ServiceAlert[];
   serverState: ServerState;
 }

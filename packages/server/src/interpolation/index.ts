@@ -42,6 +42,42 @@ interface VehicleState {
 
 const vehicleStates = new Map<string, VehicleState>();
 
+// ── Server-side trail history ──
+
+const MAX_TRAIL_POINTS = 50;
+
+/** Per-vehicle trail: entityId → array of [lon, lat] (most recent last) */
+const vehicleTrails = new Map<string, Array<[number, number]>>();
+
+/**
+ * Append a position to a vehicle's trail. Deduplicates consecutive identical points.
+ */
+function appendTrail(entityId: string, lon: number, lat: number): void {
+  let trail = vehicleTrails.get(entityId);
+  if (!trail) {
+    trail = [];
+    vehicleTrails.set(entityId, trail);
+  }
+  const last = trail[trail.length - 1];
+  if (!last || Math.abs(last[0] - lon) > 1e-7 || Math.abs(last[1] - lat) > 1e-7) {
+    trail.push([lon, lat]);
+    if (trail.length > MAX_TRAIL_POINTS) {
+      trail.splice(0, trail.length - MAX_TRAIL_POINTS);
+    }
+  }
+}
+
+/** Get all trails as a plain object for serialization */
+export function getTrails(): Record<string, Array<[number, number]>> {
+  const result: Record<string, Array<[number, number]>> = {};
+  for (const [id, trail] of vehicleTrails) {
+    if (trail.length >= 2) {
+      result[id] = trail;
+    }
+  }
+  return result;
+}
+
 /**
  * Process a new batch of vehicle positions from a poll.
  *
@@ -198,6 +234,12 @@ export function interpolate(
 ): VehiclePosition[] {
   const nowMs = Date.now();
 
+  // Clean up trails for vehicles no longer in the feed
+  const currentIds = new Set(vehicles.map((v) => v.entityId));
+  for (const key of vehicleTrails.keys()) {
+    if (!currentIds.has(key)) vehicleTrails.delete(key);
+  }
+
   return vehicles.map((v) => {
     if (v.stale) return v;
 
@@ -237,6 +279,7 @@ export function interpolate(
       const pos = sampleShape(shape, dist);
 
       if (pos) {
+        appendTrail(v.entityId, pos.lon, pos.lat);
         return {
           ...v,
           latitude: pos.lat,
@@ -251,16 +294,11 @@ export function interpolate(
     if (state.bearing === 0) return v;
 
     if (t <= 1) {
-      // Lerp between origin and target
-      return {
-        ...v,
-        latitude:
-          state.originLat + t * (state.targetLat - state.originLat),
-        longitude:
-          state.originLon + t * (state.targetLon - state.originLon),
-      };
+      const lat = state.originLat + t * (state.targetLat - state.originLat);
+      const lon = state.originLon + t * (state.targetLon - state.originLon);
+      appendTrail(v.entityId, lon, lat);
+      return { ...v, latitude: lat, longitude: lon };
     } else {
-      // Project forward past target
       const overshootSec = ((t - 1) * state.travelTimeMs) / 1000;
       const advanceM = state.speed * overshootSec;
       const [newLat, newLon] = projectForwardFallback(
@@ -269,6 +307,7 @@ export function interpolate(
         state.bearing,
         advanceM
       );
+      appendTrail(v.entityId, newLon, newLat);
       return { ...v, latitude: newLat, longitude: newLon };
     }
   });

@@ -107,6 +107,8 @@ export interface WorldState {
   timestamp: number;
   /** All active vehicles */
   vehicles: VehiclePosition[];
+  /** Trails: entityId → array of [lon, lat] points (most recent last) */
+  trails: Record<string, Array<[number, number]>>;
   /** Active service alerts by mode */
   alerts: ServiceAlert[];
   /** Server state for client awareness */

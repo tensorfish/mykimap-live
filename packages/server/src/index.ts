@@ -2,7 +2,7 @@ import { config } from "./config.js";
 import { ServerStateMachine } from "./state-machine.js";
 import { loadProtoSchema } from "./poller/decoder.js";
 import { poll } from "./poller/index.js";
-import { processSnapshot, interpolate } from "./interpolation/index.js";
+import { processSnapshot, interpolate, getTrails } from "./interpolation/index.js";
 import { addClient, removeClient, broadcast, clientCount } from "./broadcast/index.js";
 import { loadShapes, shapeStats } from "./shapes/index.js";
 import { log } from "./logger.js";
@@ -176,6 +176,7 @@ function broadcastCycle(): void {
   const state: WorldState = {
     timestamp: Math.floor(now / 1000),
     vehicles: interpolated,
+    trails: getTrails(),
     alerts: currentAlerts,
     serverState: sm.state,
   };
@@ -233,6 +234,7 @@ function startServer(): void {
           const state: WorldState = {
             timestamp: Math.floor(Date.now() / 1000),
             vehicles: currentVehicles,
+            trails: getTrails(),
             alerts: currentAlerts,
             serverState: sm.state,
           };

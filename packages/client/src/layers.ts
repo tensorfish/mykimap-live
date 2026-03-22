@@ -13,17 +13,8 @@ const MODE_COLORS: Record<TransportMode, [number, number, number]> = {
 
 const STALE_COLOR: [number, number, number] = [100, 100, 100];
 
-/** Trail colors — slightly dimmer than the arrow */
-const TRAIL_COLORS: Record<TransportMode, [number, number, number]> = {
-  metro: [52, 172, 225],
-  tram: [120, 190, 32],
-  bus: [255, 130, 0],
-  vline: [165, 127, 178],
-};
-
 // ── Sizing ──
 
-/** Mode → icon pixel size at zoom 13 */
 const MODE_SIZE: Record<TransportMode, number> = {
   metro: 28,
   tram: 22,
@@ -43,6 +34,10 @@ function getArrowIconUrl(): string {
 }
 
 // ── Vehicle arrow layer ──
+// No deck.gl transitions — the server interpolates at 1s ticks,
+// positions change smoothly tick-to-tick. Adding transitions on top
+// caused "splattering" because deck.gl matches by array index,
+// not by entityId, so reordered arrays animate to wrong positions.
 
 export function createVehicleLayer(vehicles: VehiclePosition[]) {
   return new IconLayer<VehiclePosition>({
@@ -55,66 +50,32 @@ export function createVehicleLayer(vehicles: VehiclePosition[]) {
     getColor: (d) =>
       d.stale ? [...STALE_COLOR, 160] : [...MODE_COLORS[d.mode], 230],
     getSize: (d) => MODE_SIZE[d.mode],
-    getAngle: (d) => 360 - d.bearing,
+    // deck.gl getAngle: 0°=east, positive=counter-clockwise
+    // Bearing: 0°=north, positive=clockwise
+    // Conversion: angle = 90 - bearing
+    getAngle: (d) => 90 - d.bearing,
     sizeScale: 1,
     sizeUnits: "pixels" as const,
     sizeMinPixels: 8,
     sizeMaxPixels: 40,
     pickable: true,
     billboard: false,
-
-    transitions: {
-      getPosition: {
-        duration: 1000,
-        easing: (t: number) => t,
-      },
-      getAngle: {
-        duration: 1000,
-        easing: (t: number) => t,
-      },
-    },
-
     updateTriggers: {
+      getPosition: [vehicles],
+      getAngle: [vehicles],
       getColor: [vehicles.length],
     },
   });
 }
 
-// ── Trail data shape ──
+// ── Trail layer ──
 
 interface TrailData {
+  entityId: string;
   path: Array<[number, number]>;
-  color: [number, number, number];
   mode: TransportMode;
 }
 
-/**
- * Build trail data by joining vehicle positions with their trail history.
- * Each trail is a path of [lon, lat] points.
- */
-function buildTrailData(
-  vehicles: VehiclePosition[],
-  trails: Map<string, Array<[number, number]>>
-): TrailData[] {
-  const data: TrailData[] = [];
-
-  for (const v of vehicles) {
-    if (v.stale) continue;
-
-    const trail = trails.get(v.entityId);
-    if (!trail || trail.length < 2) continue;
-
-    data.push({
-      path: trail,
-      color: TRAIL_COLORS[v.mode],
-      mode: v.mode,
-    });
-  }
-
-  return data;
-}
-
-/** Trail width per mode (pixels) */
 const TRAIL_WIDTH: Record<TransportMode, number> = {
   metro: 3,
   tram: 2.5,
@@ -123,25 +84,33 @@ const TRAIL_WIDTH: Record<TransportMode, number> = {
 };
 
 /**
- * Snail trail layer — fading path behind each vehicle.
- * Uses PathLayer with per-vertex colors for the fade effect.
+ * Build trail layer from server-provided trails.
+ * Trails arrive as a Record<entityId, [lon,lat][]> from the server.
  */
 export function createTrailLayer(
   vehicles: VehiclePosition[],
-  trails: Map<string, Array<[number, number]>>
+  trails: Record<string, Array<[number, number]>>
 ) {
-  const data = buildTrailData(vehicles, trails);
+  // Build a mode lookup from vehicles
+  const modeMap = new Map<string, TransportMode>();
+  for (const v of vehicles) {
+    modeMap.set(v.entityId, v.mode);
+  }
+
+  const data: TrailData[] = [];
+  for (const [entityId, path] of Object.entries(trails)) {
+    if (path.length < 2) continue;
+    const mode = modeMap.get(entityId);
+    if (!mode) continue;
+    data.push({ entityId, path, mode });
+  }
 
   return new PathLayer<TrailData>({
     id: "trails",
     data,
     getPath: (d) => d.path,
     getColor: (d) => {
-      const [r, g, b] = d.color;
-      // Base alpha — PathLayer applies this uniformly
-      // The fade effect comes from the trail naturally: older points
-      // are at the tail end, but since PathLayer doesn't support
-      // per-vertex alpha easily, we use a moderate opacity
+      const [r, g, b] = MODE_COLORS[d.mode];
       return [r, g, b, 100];
     },
     getWidth: (d) => TRAIL_WIDTH[d.mode],
@@ -151,12 +120,5 @@ export function createTrailLayer(
     capRounded: true,
     jointRounded: true,
     pickable: false,
-
-    transitions: {
-      getPath: {
-        duration: 1000,
-        easing: (t: number) => t,
-      },
-    },
   });
 }

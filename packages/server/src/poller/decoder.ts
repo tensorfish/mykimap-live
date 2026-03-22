@@ -64,7 +64,7 @@ export function decodeVehiclePositions(
       vehicleLabel: v.vehicle?.label ?? "",
       latitude: v.position?.latitude ?? 0,
       longitude: v.position?.longitude ?? 0,
-      bearing: v.position?.bearing ?? 0,
+      bearing: ((v.position?.bearing ?? 0) + 360) % 360, // Normalize to 0–360
       speed: 0, // Never provided by Victoria feeds — calculated later
       timestamp: vehicleTimestamp,
       stale: false, // Calculated later based on age
