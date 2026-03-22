@@ -44,8 +44,17 @@ const vehicleStates = new Map<string, VehicleState>();
 
 // ── Server-side trail history ──
 
-/** ~50 seconds of trail at 1 tick/s */
-const MAX_TRAIL_POINTS = 50;
+/**
+ * Trail length per mode (in points, at ~1 point/tick).
+ * Buses and trams travel slower so a longer trail covers a similar
+ * visual distance on the map as a shorter train trail.
+ */
+const TRAIL_LENGTH: Record<TransportMode, number> = {
+  metro: 30,
+  vline: 30,
+  tram: 60,
+  bus: 80,
+};
 
 /** Per-vehicle trail: entityId → array of [lon, lat] (most recent last) */
 const vehicleTrails = new Map<string, Array<[number, number]>>();
@@ -53,7 +62,7 @@ const vehicleTrails = new Map<string, Array<[number, number]>>();
 /**
  * Append a position to a vehicle's trail. Deduplicates consecutive identical points.
  */
-function appendTrail(entityId: string, lon: number, lat: number): void {
+function appendTrail(entityId: string, lon: number, lat: number, mode: TransportMode): void {
   let trail = vehicleTrails.get(entityId);
   if (!trail) {
     trail = [];
@@ -61,9 +70,10 @@ function appendTrail(entityId: string, lon: number, lat: number): void {
   }
   const last = trail[trail.length - 1];
   if (!last || Math.abs(last[0] - lon) > 1e-7 || Math.abs(last[1] - lat) > 1e-7) {
+    const max = TRAIL_LENGTH[mode];
     trail.push([lon, lat]);
-    if (trail.length > MAX_TRAIL_POINTS) {
-      trail.splice(0, trail.length - MAX_TRAIL_POINTS);
+    if (trail.length > max) {
+      trail.splice(0, trail.length - max);
     }
   }
 }
@@ -281,7 +291,7 @@ export function interpolate(
       const pos = sampleShape(shape, dist);
 
       if (pos) {
-        appendTrail(v.entityId, pos.lon, pos.lat);
+        appendTrail(v.entityId, pos.lon, pos.lat, v.mode);
         return {
           ...v,
           latitude: pos.lat,
@@ -298,7 +308,7 @@ export function interpolate(
     if (t <= 1) {
       const lat = state.originLat + t * (state.targetLat - state.originLat);
       const lon = state.originLon + t * (state.targetLon - state.originLon);
-      appendTrail(v.entityId, lon, lat);
+      appendTrail(v.entityId, lon, lat, v.mode);
       return { ...v, latitude: lat, longitude: lon, bearing: bearingFromTrail(v.entityId) || v.bearing };
     } else {
       const overshootSec = ((t - 1) * state.travelTimeMs) / 1000;
@@ -309,7 +319,7 @@ export function interpolate(
         state.bearing,
         advanceM
       );
-      appendTrail(v.entityId, newLon, newLat);
+      appendTrail(v.entityId, newLon, newLat, v.mode);
       return { ...v, latitude: newLat, longitude: newLon, bearing: bearingFromTrail(v.entityId) || v.bearing };
     }
   });
