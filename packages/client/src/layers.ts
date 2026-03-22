@@ -31,9 +31,12 @@ function getArrowIconUrl(): string {
 // this queue at constant speed. As new ticks arrive, their path
 // segments are appended to the end. The animation never breaks.
 
+/** Max trail points per mode. Sampled every ~100ms (not every frame). */
 const TRAIL_MAX: Record<TransportMode, number> = {
-  metro: 30, vline: 30, tram: 60, bus: 80,
+  metro: 300, vline: 300, tram: 600, bus: 800,
 };
+/** Only append a trail point every TRAIL_SAMPLE_MS to keep point count sane */
+const TRAIL_SAMPLE_MS = 100;
 
 interface VehicleQueue {
   /** All waypoints concatenated, in order */
@@ -54,6 +57,8 @@ interface VehicleQueue {
   prevBearing: number;
   /** Client-side trail: positions the playhead has already passed */
   trail: Array<[number, number]>;
+  /** Last time a trail point was appended (throttled to TRAIL_SAMPLE_MS) */
+  lastTrailAt: number;
   mode: TransportMode;
 }
 
@@ -139,6 +144,7 @@ export function feedTick(vehicles: VehiclePosition[]): void {
         bearing: v.bearing,
         prevBearing: v.bearing,
         trail: [],
+        lastTrailAt: 0,
         mode: v.mode,
       };
       queues.set(v.entityId, q);
@@ -207,12 +213,16 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
     const pos = sampleQueue(q);
     trimQueue(q);
 
-    // Append to client-side trail (only positions the arrow has passed)
-    const lastTrail = q.trail[q.trail.length - 1];
-    if (!lastTrail || Math.abs(lastTrail[0] - pos[0]) > 1e-7 || Math.abs(lastTrail[1] - pos[1]) > 1e-7) {
-      q.trail.push(pos);
-      const max = TRAIL_MAX[q.mode];
-      if (q.trail.length > max) q.trail.splice(0, q.trail.length - max);
+    // Append to client-side trail, throttled to avoid too many points
+    const now = performance.now();
+    if (now - q.lastTrailAt >= TRAIL_SAMPLE_MS) {
+      const lastPt = q.trail[q.trail.length - 1];
+      if (!lastPt || Math.abs(lastPt[0] - pos[0]) > 1e-7 || Math.abs(lastPt[1] - pos[1]) > 1e-7) {
+        q.trail.push([pos[0], pos[1]]);
+        const max = TRAIL_MAX[q.mode];
+        if (q.trail.length > max) q.trail.splice(0, q.trail.length - max);
+      }
+      q.lastTrailAt = now;
     }
 
     return {
