@@ -59,52 +59,40 @@ function renderPanel(v: VehiclePosition, alerts: ServiceAlert[]): string {
     <h2>Route ${routeShort}</h2>
   `;
 
-  // Vehicle class (trams only — skip for other modes)
+  // Tram class
   if (v.vehicleLabel) {
-    html += `
-    <div class="panel-field">
-      <div class="panel-field-label">Class</div>
-      <div class="panel-field-value">${v.vehicleLabel}</div>
-    </div>
-    `;
+    html += field("Class", v.vehicleLabel);
   }
 
-  // Speed — only show if moving
-  if (v.speed >= 0.5) {
-    html += `
-    <div class="panel-field">
-      <div class="panel-field-label">Speed</div>
-      <div class="panel-field-value">${speedKmh} km/h</div>
-    </div>
-    `;
+  // Speed
+  html += field("Speed", v.speed >= 0.5 ? `${speedKmh} km/h` : "Stationary");
+
+  // Direction
+  if (v.bearing > 0) {
+    html += field("Heading", bearingLabel(v.bearing));
   }
 
   // Departure time
   if (v.startTime) {
-    html += `
-    <div class="panel-field">
-      <div class="panel-field-label">Departed</div>
-      <div class="panel-field-value">${v.startTime}</div>
-    </div>
-    `;
+    html += field("Departed", v.startTime);
   }
 
-  // Last update — human readable
-  html += `
-    <div class="panel-field">
-      <div class="panel-field-label">Last update</div>
-      <div class="panel-field-value">${timeAgo(v.timestamp)}</div>
-    </div>
-  `;
+  // Last update
+  html += field("Updated", timeAgo(v.timestamp));
 
-  // Status — only show if stale
+  // Stale warning
   if (v.stale) {
-    html += `
-    <div class="panel-field">
-      <div class="panel-field-value" style="color:#f0ad4e">⚠ Position may be outdated</div>
-    </div>
-    `;
+    html += `<div class="panel-field"><div class="panel-field-value" style="color:#f0ad4e">⚠ Position may be outdated</div></div>`;
   }
+
+  // Subtle details — secondary info in smaller muted text
+  html += `<hr class="panel-divider">`;
+  html += `<div class="panel-subtle">`;
+  html += subtleField("Vehicle", v.vehicleId || "—");
+  html += subtleField("Position", `${v.latitude.toFixed(5)}, ${v.longitude.toFixed(5)}`);
+  html += subtleField("Bearing", `${v.bearing.toFixed(0)}°`);
+  html += subtleField("Trip", v.tripId);
+  html += `</div>`;
 
   // Alerts
   if (routeAlerts.length > 0) {
@@ -122,10 +110,23 @@ function renderPanel(v: VehiclePosition, alerts: ServiceAlert[]): string {
   return html;
 }
 
+function field(label: string, value: string): string {
+  return `<div class="panel-field"><div class="panel-field-label">${label}</div><div class="panel-field-value">${value}</div></div>`;
+}
+
+function subtleField(label: string, value: string): string {
+  return `<div class="panel-subtle-row"><span class="panel-subtle-label">${label}</span><span class="panel-subtle-value">${value}</span></div>`;
+}
+
 function extractRouteShort(routeId: string, mode: TransportMode): string {
   if (mode === "bus") return routeId;
   const match = routeId.match(/-(\w+):$/);
   return match ? match[1]! : routeId;
+}
+
+function bearingLabel(deg: number): string {
+  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return dirs[Math.round(deg / 45) % 8]!;
 }
 
 function timeAgo(posix: number): string {
