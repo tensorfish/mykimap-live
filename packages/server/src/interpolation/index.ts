@@ -243,13 +243,32 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
         const bearing = bearingAtDist(shape, clampedDist, direction);
         const speed = span > 0 ? Math.abs(distB - distA) / span : 0;
 
-        // Generate path segment: all shape vertices between last broadcast
-        // position and current position. This gives the client the actual
-        // route geometry to walk along at 60fps — every curve and turn.
+        // Generate path segment between last broadcast position and current.
+        // Sanity check: if the shape distance jumped too far (wrong snap,
+        // loop route, or shape mismatch), the path segment would cut across
+        // the map through buildings. Cap to reasonable max per tick.
         const prevDist = lastBroadcastDist.get(entityId) ?? clampedDist;
-        const pathSegment = (!vB.stale && speed >= 0.5)
-          ? sampleShapeSegment(shape, prevDist, clampedDist)
-          : [];
+        const segShapeDist = Math.abs(clampedDist - prevDist);
+        // Max reasonable movement per broadcast tick: speed × 2s (generous)
+        const maxSegDist = speed * 2;
+        let pathSegment: Array<[number, number]> = [];
+
+        if (!vB.stale && speed >= 0.5 && segShapeDist <= maxSegDist && segShapeDist > 0.1) {
+          pathSegment = sampleShapeSegment(shape, prevDist, clampedDist);
+
+          // Extra sanity: if the path segment is wildly longer than the
+          // straight-line distance between endpoints, it's a bad match
+          if (pathSegment.length >= 2) {
+            const startPt = pathSegment[0]!;
+            const endPt = pathSegment[pathSegment.length - 1]!;
+            const straightDist = haversineDistance(startPt[1], startPt[0], endPt[1], endPt[0]);
+            // If path is > 5× the straight-line distance and > 200m, it's cutting across
+            if (straightDist > 200 && segShapeDist > straightDist * 5) {
+              pathSegment = [];
+            }
+          }
+        }
+
         lastBroadcastDist.set(entityId, clampedDist);
 
         // Trail from shape-interpolated positions (on-route)

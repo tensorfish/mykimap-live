@@ -201,14 +201,28 @@ export function feedTick(vehicles: VehiclePosition[]): void {
 
     const seg = v.pathSegment && v.pathSegment.length >= 2 ? v.pathSegment : null;
     if (seg) {
-      const prevTotal = q.totalDist;
-      appendToQueue(q, seg);
-      const addedDist = q.totalDist - prevTotal;
-      const dt = now - q.lastAppendAt;
-      if (dt > 0 && addedDist > 0) {
-        q.speed = addedDist / dt;
+      // Sanity check: if the segment jumps too far from the queue's
+      // last point, it's a bad shape match — skip it to avoid
+      // trails cutting through buildings
+      const lastQueuePt = q.points[q.points.length - 1];
+      const segStart = seg[0]!;
+      let skip = false;
+      if (lastQueuePt) {
+        const jumpDist = degDist(lastQueuePt, segStart);
+        // ~0.001 degrees ≈ 100m — if the jump is bigger, skip
+        if (jumpDist > 0.003) skip = true;
       }
-      q.lastAppendAt = now;
+
+      if (!skip) {
+        const prevTotal = q.totalDist;
+        appendToQueue(q, seg);
+        const addedDist = q.totalDist - prevTotal;
+        const dt = now - q.lastAppendAt;
+        if (dt > 0 && addedDist > 0) {
+          q.speed = addedDist / dt;
+        }
+        q.lastAppendAt = now;
+      }
     }
   }
 
