@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "duckdb": "^1.4.4",
     "protobufjs": "^7.4.0"
   },
   "devDependencies": {

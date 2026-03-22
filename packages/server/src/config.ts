@@ -54,6 +54,11 @@ export const config = {
    */
   timezone: "Australia/Melbourne" as const,
 
+  /** Recording — DuckDB snapshot storage */
+  recordingEnabled: optionalEnv("RECORDING_ENABLED", "false") === "true",
+  recordingDataDir: optionalEnv("RECORDING_DATA_DIR", ".data/snapshots"),
+  recordingRetentionDays: parseInt(optionalEnv("RECORDING_RETENTION_DAYS", "30"), 10),
+
   /** GTFS Schedule (static) — used for route shapes */
   gtfsScheduleUrl: optionalEnv(
     "GTFS_SCHEDULE_URL",

@@ -5,6 +5,7 @@ import { poll } from "./poller/index.js";
 import { processSnapshot, interpolate, getTrails } from "./interpolation/index.js";
 import { addClient, removeClient, broadcast, clientCount } from "./broadcast/index.js";
 import { loadShapes, shapeStats, getShapeForTrip, getShapeForRoute } from "./shapes/index.js";
+import { initRecorder, recordSnapshot, closeRecorder, listRecordingDates, exportParquet } from "./recorder/index.js";
 import { log } from "./logger.js";
 import type { VehiclePosition, ServiceAlert, WorldState, InitialState } from "./types.js";
 
@@ -49,6 +50,13 @@ async function boot(): Promise<void> {
   } catch (error) {
     // Non-fatal — fall back to straight-line interpolation
     log("warn", `Failed to load route shapes, falling back to straight-line interpolation: ${error}`);
+  }
+
+  // Initialize DuckDB recorder (if enabled)
+  try {
+    initRecorder();
+  } catch (error) {
+    log("warn", `Recorder init failed (non-fatal): ${error}`);
   }
 
   // Start HTTP + WebSocket server
@@ -124,7 +132,8 @@ async function pollCycle(): Promise<void> {
         lastHeaderTimestamp = result.headerTimestamp;
         log("info", `Fresh data`, { headerTimestamp: result.headerTimestamp, vehicles: currentVehicles.length });
 
-        // FUTURE: recorder.insert(snapshot) goes here — only on fresh data
+        // Record snapshot to DuckDB (if enabled, non-blocking)
+        recordSnapshot(currentVehicles, result.headerTimestamp).catch(() => {});
       } else {
         log("debug", `Duplicate poll skipped (header timestamp unchanged: ${result.headerTimestamp})`);
       }
@@ -232,6 +241,24 @@ function startServer(): void {
         });
       }
 
+      // Snapshot listing
+      if (url.pathname === "/data/snapshots") {
+        return Response.json(listRecordingDates());
+      }
+
+      // Snapshot Parquet export
+      if (url.pathname.startsWith("/data/snapshots/")) {
+        const dateStr = url.pathname.slice("/data/snapshots/".length);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          return new Response("Invalid date format", { status: 400 });
+        }
+        const parquetPath = await exportParquet(dateStr);
+        if (!parquetPath) {
+          return new Response("Not found", { status: 404 });
+        }
+        return new Response(Bun.file(parquetPath));
+      }
+
       // Route shape endpoint — returns full polyline with cumulative distances
       if (url.pathname.startsWith("/api/route-shape/")) {
         const tripId = decodeURIComponent(url.pathname.slice("/api/route-shape/".length));
@@ -295,6 +322,7 @@ function shutdown(): void {
 
   if (pollTimer) clearInterval(pollTimer);
   if (broadcastTimer) clearInterval(broadcastTimer);
+  closeRecorder().catch(() => {});
 
   sm.transition("STOPPED", "Cleanup complete", "system");
   process.exit(0);
