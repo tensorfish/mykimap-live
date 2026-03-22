@@ -2,7 +2,6 @@ import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import { store, getVehicles, getTrails } from "./store.js";
 import { createVehicleLayer, createTrailLayer } from "./layers.js";
-import { transition } from "./store.js";
 
 // Melbourne CBD
 const INITIAL_VIEW = {
@@ -17,12 +16,17 @@ let deck: Deck | null = null;
 
 /**
  * Initialize the Mapbox base map and deck.gl overlay.
- * Subscribes to the store — whenever worldState changes,
- * the vehicle layer is rebuilt automatically.
+ *
+ * Mapbox owns all user interaction (pan, zoom, rotate).
+ * deck.gl renders as a passive overlay — no controller.
+ * On each Mapbox move event, we sync deck.gl's viewState.
+ *
+ * `onReady` is called exactly once when the map finishes loading.
  */
 export function initMap(
   container: HTMLDivElement,
-  mapboxToken: string
+  mapboxToken: string,
+  onReady: () => void
 ): void {
   mapboxgl.accessToken = mapboxToken;
 
@@ -36,21 +40,17 @@ export function initMap(
     antialias: true,
   });
 
+  // deck.gl as a passive overlay — Mapbox handles interaction
   deck = new Deck({
     parent: container,
     viewState: INITIAL_VIEW,
-    controller: true,
+    controller: false, // Mapbox owns pan/zoom/rotate
     layers: [],
-    style: { position: "absolute", top: "0", left: "0" },
-
-    // Sync deck.gl viewState with Mapbox on user interaction
-    onViewStateChange: ({ viewState }) => {
-      map.jumpTo({
-        center: [viewState.longitude, viewState.latitude],
-        zoom: viewState.zoom,
-        bearing: viewState.bearing,
-        pitch: viewState.pitch,
-      });
+    style: {
+      position: "absolute",
+      top: "0",
+      left: "0",
+      pointerEvents: "none", // Let mouse events pass through to Mapbox
     },
 
     getTooltip: ({ object }: any) => {
@@ -69,7 +69,24 @@ export function initMap(
     },
   });
 
-  // Subscribe to store changes — update layers when vehicles change
+  // Sync deck.gl viewState whenever Mapbox moves
+  function syncViewState() {
+    if (!deck) return;
+    const center = map.getCenter();
+    deck.setProps({
+      viewState: {
+        longitude: center.lng,
+        latitude: center.lat,
+        zoom: map.getZoom(),
+        pitch: map.getPitch(),
+        bearing: map.getBearing(),
+      },
+    });
+  }
+
+  map.on("move", syncViewState);
+
+  // Subscribe to store — update layers when vehicles change
   store.subscribe(() => {
     if (!deck) return;
     const vehicles = getVehicles();
@@ -82,13 +99,8 @@ export function initMap(
     });
   });
 
-  // Map ready — signal the state machine
+  // Map ready — fire callback exactly once
   map.on("load", () => {
-    transition("CONNECTING", "Map loaded");
-  });
-
-  map.on("error", (e) => {
-    console.error("[map] Error:", e);
-    transition("ERROR", `Map error: ${e.error?.message ?? "unknown"}`);
+    onReady();
   });
 }

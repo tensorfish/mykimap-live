@@ -1,7 +1,7 @@
 import { initMap } from "./map.js";
 import { initStatusBar } from "./ui.js";
 import { connect } from "./ws.js";
-import { store, transition } from "./store.js";
+import { transition } from "./store.js";
 
 // ── Bootstrap ──
 
@@ -14,16 +14,11 @@ if (!MAPBOX_TOKEN) {
 } else {
   const container = document.getElementById("map")! as HTMLDivElement;
 
-  // Wire up the status bar
   initStatusBar();
 
-  // Initialize map — will transition to CONNECTING when map loads
-  initMap(container, MAPBOX_TOKEN);
-
-  // When map signals CONNECTING, open the WebSocket
-  store.subscribe(() => {
-    if (store.state.clientState === "CONNECTING") {
-      connect();
-    }
+  // Initialize map. When ready, connect the WebSocket exactly once.
+  initMap(container, MAPBOX_TOKEN, () => {
+    transition("CONNECTING", "Map loaded");
+    connect();
   });
 }
