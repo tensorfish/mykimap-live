@@ -24,49 +24,37 @@ function getArrowIconUrl(): string {
   return arrowIconUrl;
 }
 
-// ── Continuous path queue per vehicle ──
-//
-// Each vehicle has a queue of [lon, lat] waypoints built from
-// pathSegments received from the server. The playhead walks along
-// this queue at constant speed. As new ticks arrive, their path
-// segments are appended to the end. The animation never breaks.
+// ── Trail config ──
 
-/** Max trail points per mode. Sampled every ~100ms (not every frame). */
 const TRAIL_MAX: Record<TransportMode, number> = {
   metro: 300, vline: 300, tram: 600, bus: 800,
 };
-/** Only append a trail point every TRAIL_SAMPLE_MS to keep point count sane */
-const TRAIL_SAMPLE_MS = 100;
+
+// ── Path queue per vehicle ──
+//
+// The trail IS the consumed portion of the path queue.
+// As the playhead advances past queue points, those points move
+// into the trail. Since queue points come from pathSegment (which
+// is sampled from the GTFS shape polyline), the trail follows
+// every curve of the route. No straight-line cutting.
 
 interface VehicleQueue {
-  /** All waypoints concatenated, in order */
+  /** Upcoming waypoints (ahead of playhead) */
   points: Array<[number, number]>;
-  /** Cumulative distance at each point */
   dists: number[];
-  /** Total distance of the queue */
   totalDist: number;
-  /** Current playhead distance (advanced each frame) */
   playhead: number;
-  /** Speed in degrees-per-ms (computed from last segment) */
-  speed: number;
-  /** When the last segment was appended (for speed pacing) */
+  speed: number; // degrees-per-ms
   lastAppendAt: number;
-  /** Target bearing from latest server tick */
-  bearing: number;
-  /** Previous bearing for smooth rotation */
-  prevBearing: number;
-  /** Client-side trail: positions the playhead has already passed */
+  /** Trail: route points the playhead has already passed */
   trail: Array<[number, number]>;
-  /** Last time a trail point was appended (throttled to TRAIL_SAMPLE_MS) */
-  lastTrailAt: number;
   mode: TransportMode;
 }
 
 const queues = new Map<string, VehicleQueue>();
 
 function degDist(a: [number, number], b: [number, number]): number {
-  const dx = b[0] - a[0];
-  const dy = b[1] - a[1];
+  const dx = b[0] - a[0], dy = b[1] - a[1];
   return Math.sqrt(dx * dx + dy * dy);
 }
 
@@ -75,7 +63,7 @@ function appendToQueue(q: VehicleQueue, segment: Array<[number, number]>): void 
     const last = q.points[q.points.length - 1];
     if (last) {
       const d = degDist(last, pt);
-      if (d < 1e-9) continue; // skip duplicate points
+      if (d < 1e-9) continue;
       q.totalDist += d;
     }
     q.points.push(pt);
@@ -83,24 +71,10 @@ function appendToQueue(q: VehicleQueue, segment: Array<[number, number]>): void 
   }
 }
 
-function trimQueue(q: VehicleQueue): void {
-  // Remove consumed points (keep a few behind the playhead for safety)
-  let trimTo = 0;
-  for (let i = 0; i < q.dists.length - 1; i++) {
-    if (q.dists[i]! < q.playhead - 0.001) trimTo = i;
-    else break;
-  }
-  if (trimTo > 0) {
-    q.points.splice(0, trimTo);
-    q.dists.splice(0, trimTo);
-  }
-}
-
 function sampleQueue(q: VehicleQueue): [number, number] {
   if (q.points.length === 0) return [0, 0];
   if (q.points.length === 1) return q.points[0]!;
 
-  // Clamp playhead
   const d = Math.max(q.dists[0]!, Math.min(q.playhead, q.totalDist));
 
   for (let i = 0; i < q.points.length - 1; i++) {
@@ -113,58 +87,96 @@ function sampleQueue(q: VehicleQueue): [number, number] {
       ];
     }
   }
-
   return q.points[q.points.length - 1]!;
 }
 
 /**
- * Feed a backlog of ticks into the queues (on initial connect).
- * After appending all path segments, fast-forward the playhead through
- * the first (backlog.length - 1) ticks so the trail is pre-built.
- * The playhead stops 1 tick before the end, leaving the last tick's
- * path as the animation starting point.
+ * Advance playhead and move consumed queue points into the trail.
+ * The trail is built from actual route geometry points, not sampled
+ * playhead positions — so it follows every curve.
  */
+function advanceAndTrail(q: VehicleQueue, dtMs: number): [number, number] {
+  const ahead = q.totalDist - q.playhead;
+  if (ahead > 0 && q.speed > 0) {
+    q.playhead += q.speed * dtMs;
+    q.playhead = Math.min(q.playhead, q.totalDist);
+  }
+
+  // Move queue points that the playhead has passed INTO the trail.
+  // These points are from the pathSegment = actual route geometry.
+  const max = TRAIL_MAX[q.mode];
+  while (q.points.length > 1 && q.dists[1]! <= q.playhead) {
+    const consumed = q.points.shift()!;
+    q.dists.shift();
+
+    // Append to trail (deduplicate)
+    const last = q.trail[q.trail.length - 1];
+    if (!last || Math.abs(last[0] - consumed[0]) > 1e-9 || Math.abs(last[1] - consumed[1]) > 1e-9) {
+      q.trail.push(consumed);
+      if (q.trail.length > max) q.trail.shift();
+    }
+  }
+
+  // Current position (between two remaining queue points)
+  const pos = sampleQueue(q);
+
+  // Also add current interpolated position to trail tip
+  // (so the trail reaches right up to the arrow)
+  const lastTrail = q.trail[q.trail.length - 1];
+  if (lastTrail && (Math.abs(lastTrail[0] - pos[0]) > 1e-8 || Math.abs(lastTrail[1] - pos[1]) > 1e-8)) {
+    // Replace the last trail point with current position (live tip)
+    // We'll add a "live tip" that gets overwritten each frame
+    if (q.trail.length > 0 && (q.trail as any)._hasTip) {
+      q.trail[q.trail.length - 1] = [pos[0], pos[1]];
+    } else {
+      q.trail.push([pos[0], pos[1]]);
+      (q.trail as any)._hasTip = true;
+      if (q.trail.length > max) q.trail.shift();
+    }
+  }
+
+  return pos;
+}
+
+/**
+ * Compute arrow bearing from the last two trail points.
+ * This is the actual direction the arrow just moved — always correct
+ * regardless of shape direction or server bearing computation.
+ */
+function bearingFromTrail(q: VehicleQueue): number {
+  if (q.trail.length < 2) return 0;
+  const a = q.trail[q.trail.length - 2]!;
+  const b = q.trail[q.trail.length - 1]!;
+  const dlon = b[0] - a[0];
+  const dlat = b[1] - a[1];
+  if (Math.abs(dlon) < 1e-9 && Math.abs(dlat) < 1e-9) return 0;
+  // atan2(dlon, dlat) gives bearing from north, clockwise
+  const rad = Math.atan2(dlon, dlat);
+  return ((rad * 180 / Math.PI) + 360) % 360;
+}
+
+// ── Backlog + tick feeding ──
+
 export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {
   if (backlog.length === 0) return;
 
-  // Feed all ticks to build the full path queue
   for (const tick of backlog) {
     feedTick(tick.vehicles);
   }
 
-  // Fast-forward playhead through all but the last tick.
-  // This consumes the historical path and builds trail points
-  // so the trail is visible from the first rendered frame.
+  // Fast-forward through all but the last tick to pre-build trail
   const ticksToConsume = backlog.length - 1;
   if (ticksToConsume <= 0) return;
 
   for (const [, q] of queues) {
     if (q.speed <= 0 || q.totalDist <= 0) continue;
-
-    // Each tick added roughly (totalDist / backlog.length) of path.
-    // Advance the playhead to consume ticksToConsume ticks worth.
     const targetDist = q.totalDist * (ticksToConsume / backlog.length);
-    const steps = ticksToConsume * 10; // sample trail at ~10 points per tick
-    const stepDist = targetDist / steps;
-
-    for (let i = 0; i < steps; i++) {
-      q.playhead = Math.min(q.playhead + stepDist, q.totalDist);
-      const pos = sampleQueue(q);
-
-      // Append trail point
-      const lastPt = q.trail[q.trail.length - 1];
-      if (!lastPt || Math.abs(lastPt[0] - pos[0]) > 1e-7 || Math.abs(lastPt[1] - pos[1]) > 1e-7) {
-        q.trail.push([pos[0], pos[1]]);
-        const max = TRAIL_MAX[q.mode];
-        if (q.trail.length > max) q.trail.splice(0, q.trail.length - max);
-      }
-    }
-
-    trimQueue(q);
+    // Advance in one step — advanceAndTrail handles moving points to trail
+    const fakeDt = targetDist / q.speed;
+    advanceAndTrail(q, fakeDt);
   }
 }
 
-/** Feed a single server tick — append path segments to queues */
 export function feedTick(vehicles: VehiclePosition[]): void {
   const now = Date.now();
   const seen = new Set<string>();
@@ -181,40 +193,31 @@ export function feedTick(vehicles: VehiclePosition[]): void {
         playhead: 0,
         speed: 0,
         lastAppendAt: now,
-        bearing: v.bearing,
-        prevBearing: v.bearing,
         trail: [],
-        lastTrailAt: 0,
         mode: v.mode,
       };
       queues.set(v.entityId, q);
     }
 
-    // Append path segment from server
     const seg = v.pathSegment && v.pathSegment.length >= 2 ? v.pathSegment : null;
-
     if (seg) {
       const prevTotal = q.totalDist;
       appendToQueue(q, seg);
       const addedDist = q.totalDist - prevTotal;
       const dt = now - q.lastAppendAt;
       if (dt > 0 && addedDist > 0) {
-        q.speed = addedDist / dt; // degrees per ms
+        q.speed = addedDist / dt;
       }
       q.lastAppendAt = now;
     }
-
-    q.prevBearing = q.bearing;
-    q.bearing = v.bearing;
   }
 
-  // Remove departed
   for (const id of queues.keys()) {
     if (!seen.has(id)) queues.delete(id);
   }
 }
 
-// ── Compute display positions for this frame ──
+// ── Compute display ──
 
 export interface DisplayVehicle {
   entityId: string;
@@ -243,33 +246,17 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
       };
     }
 
-    // Advance playhead along the queue at the vehicle's speed
-    const ahead = q.totalDist - q.playhead;
-    if (ahead > 0) {
-      q.playhead += q.speed * dtMs;
-      q.playhead = Math.min(q.playhead, q.totalDist);
-    }
+    const pos = advanceAndTrail(q, dtMs);
 
-    const pos = sampleQueue(q);
-    trimQueue(q);
-
-    // Append to client-side trail, throttled to avoid too many points
-    const now = performance.now();
-    if (now - q.lastTrailAt >= TRAIL_SAMPLE_MS) {
-      const lastPt = q.trail[q.trail.length - 1];
-      if (!lastPt || Math.abs(lastPt[0] - pos[0]) > 1e-7 || Math.abs(lastPt[1] - pos[1]) > 1e-7) {
-        q.trail.push([pos[0], pos[1]]);
-        const max = TRAIL_MAX[q.mode];
-        if (q.trail.length > max) q.trail.splice(0, q.trail.length - max);
-      }
-      q.lastTrailAt = now;
-    }
+    // Bearing from actual movement direction (last two trail points)
+    const bearing = bearingFromTrail(q);
 
     return {
       entityId: v.entityId, mode: v.mode,
       position: pos,
-      angle: -v.bearing, stale: v.stale, speed: v.speed,
-      bearing: v.bearing, routeId: v.routeId,
+      angle: bearing !== 0 ? -bearing : -v.bearing,
+      stale: v.stale, speed: v.speed,
+      bearing: bearing || v.bearing, routeId: v.routeId,
       vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
     };
   });
@@ -310,8 +297,6 @@ export function createVehicleLayer(
 }
 
 // ── Trail layer ──
-// Trail is built client-side from positions the playhead has already
-// passed through. This guarantees the trail is always BEHIND the arrow.
 
 interface TrailData {
   entityId: string;
