@@ -24,226 +24,178 @@ function getArrowIconUrl(): string {
   return arrowIconUrl;
 }
 
-// ── Trail config ──
-// All modes get the same visual trail length (~500m).
-// Trimmed by distance, not by point count.
+// ── Route shape cache ──
+// Each route's full shape is fetched once and cached.
+// Vehicles animate along this shape using shapeDistTraveled (meters).
 
-const TRAIL_MAX_POINTS = 500;
-const TRAIL_MAX_DIST = 0.0045; // ~500m in degrees
-
-// ── Path queue per vehicle ──
-//
-// The trail IS the consumed portion of the path queue.
-// As the playhead advances past queue points, those points move
-// into the trail. Since queue points come from pathSegment (which
-// is sampled from the GTFS shape polyline), the trail follows
-// every curve of the route. No straight-line cutting.
-
-interface VehicleQueue {
-  /** Upcoming waypoints (ahead of playhead) */
-  points: Array<[number, number]>;
-  dists: number[];
+interface CachedShape {
+  path: Array<[number, number]>;
+  dists: number[]; // cumulative meters
   totalDist: number;
-  playhead: number;
-  speed: number; // degrees-per-ms
-  lastAppendAt: number;
-  /** Trail: route points the playhead has already passed */
-  trail: Array<[number, number]>;
-  mode: TransportMode;
 }
 
-const queues = new Map<string, VehicleQueue>();
+const shapeCache = new Map<string, CachedShape | null>(); // null = fetch in flight or failed
+const shapeFetching = new Set<string>();
 
-function degDist(a: [number, number], b: [number, number]): number {
-  const dx = b[0] - a[0], dy = b[1] - a[1];
-  return Math.sqrt(dx * dx + dy * dy);
+function getShapeCacheKey(v: VehiclePosition): string {
+  return v.routeId || v.tripId;
 }
 
-function appendToQueue(q: VehicleQueue, segment: Array<[number, number]>): void {
-  for (const pt of segment) {
-    const last = q.points[q.points.length - 1];
-    if (last) {
-      const d = degDist(last, pt);
-      if (d < 1e-9) continue;
-      q.totalDist += d;
+async function fetchAndCacheShape(v: VehiclePosition): Promise<void> {
+  const key = getShapeCacheKey(v);
+  if (shapeCache.has(key) || shapeFetching.has(key)) return;
+
+  shapeFetching.add(key);
+  try {
+    const url = `/api/route-shape/${encodeURIComponent(v.tripId)}?routeId=${encodeURIComponent(v.routeId)}`;
+    const resp = await fetch(url);
+    if (!resp.ok) { shapeCache.set(key, null); return; }
+    const data = await resp.json();
+    if (data.path && data.path.length >= 2 && data.dists) {
+      shapeCache.set(key, {
+        path: data.path,
+        dists: data.dists,
+        totalDist: data.dists[data.dists.length - 1] || 0,
+      });
+    } else {
+      shapeCache.set(key, null);
     }
-    q.points.push(pt);
-    q.dists.push(q.totalDist);
+  } catch {
+    shapeCache.set(key, null);
+  } finally {
+    shapeFetching.delete(key);
   }
 }
 
-function sampleQueue(q: VehicleQueue): [number, number] {
-  if (q.points.length === 0) return [0, 0];
-  if (q.points.length === 1) return q.points[0]!;
+function sampleShapeAtDist(shape: CachedShape, dist: number): [number, number] | null {
+  const { path, dists, totalDist } = shape;
+  if (path.length < 2) return null;
 
-  const d = Math.max(q.dists[0]!, Math.min(q.playhead, q.totalDist));
+  const d = Math.max(0, Math.min(dist, totalDist));
 
-  for (let i = 0; i < q.points.length - 1; i++) {
-    if (d >= q.dists[i]! && d <= q.dists[i + 1]!) {
-      const segLen = q.dists[i + 1]! - q.dists[i]!;
-      const t = segLen > 0 ? (d - q.dists[i]!) / segLen : 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (d >= dists[i]! && d <= dists[i + 1]!) {
+      const segLen = dists[i + 1]! - dists[i]!;
+      const t = segLen > 0 ? (d - dists[i]!) / segLen : 0;
       return [
-        q.points[i]![0] + t * (q.points[i + 1]![0] - q.points[i]![0]),
-        q.points[i]![1] + t * (q.points[i + 1]![1] - q.points[i]![1]),
+        path[i]![0] + t * (path[i + 1]![0] - path[i]![0]),
+        path[i]![1] + t * (path[i + 1]![1] - path[i]![1]),
       ];
     }
   }
-  return q.points[q.points.length - 1]!;
+  return path[path.length - 1]!;
 }
 
-/**
- * Advance playhead and move consumed queue points into the trail.
- * The trail is built from actual route geometry points, not sampled
- * playhead positions — so it follows every curve.
- */
-function advanceAndTrail(q: VehicleQueue, dtMs: number): [number, number] {
-  const ahead = q.totalDist - q.playhead;
-  if (ahead > 0 && q.speed > 0) {
-    q.playhead += q.speed * dtMs;
-    q.playhead = Math.min(q.playhead, q.totalDist);
-  }
+/** Extract shape points between two distances for the trail */
+function sliceShape(shape: CachedShape, fromDist: number, toDist: number): Array<[number, number]> {
+  const { path, dists, totalDist } = shape;
+  const lo = Math.max(0, Math.min(fromDist, toDist));
+  const hi = Math.max(0, Math.max(fromDist, toDist));
+  const result: Array<[number, number]> = [];
 
-  // Move queue points that the playhead has passed INTO the trail.
-  // These points are from the pathSegment = actual route geometry.
-  while (q.points.length > 1 && q.dists[1]! <= q.playhead) {
-    const consumed = q.points.shift()!;
-    q.dists.shift();
+  // Start point (interpolated)
+  const startPos = sampleShapeAtDist(shape, lo);
+  if (startPos) result.push(startPos);
 
-    const last = q.trail[q.trail.length - 1];
-    if (!last || Math.abs(last[0] - consumed[0]) > 1e-9 || Math.abs(last[1] - consumed[1]) > 1e-9) {
-      q.trail.push(consumed);
-      if (q.trail.length > TRAIL_MAX_POINTS) q.trail.shift();
+  // All shape vertices between lo and hi
+  for (let i = 0; i < path.length; i++) {
+    if (dists[i]! > lo && dists[i]! < hi) {
+      result.push(path[i]!);
     }
   }
 
-  // Trim trail by distance so all vehicles have the same visual length.
-  // Measure from the end (arrow tip) backwards, remove points beyond the cap.
-  while (q.trail.length > 2) {
-    const head = q.trail[q.trail.length - 1]!;
-    const tail = q.trail[0]!;
-    const trailDist = degDist(tail, head);
-    if (trailDist > TRAIL_MAX_DIST) {
-      q.trail.shift();
-    } else {
-      break;
-    }
-  }
+  // End point (interpolated)
+  const endPos = sampleShapeAtDist(shape, hi);
+  if (endPos) result.push(endPos);
 
-  // Current position (between two remaining queue points)
-  const pos = sampleQueue(q);
+  // If traveling in reverse (fromDist > toDist), flip
+  if (fromDist > toDist) result.reverse();
 
-  // Also add current interpolated position to trail tip
-  // (so the trail reaches right up to the arrow)
-  const lastTrail = q.trail[q.trail.length - 1];
-  if (lastTrail && (Math.abs(lastTrail[0] - pos[0]) > 1e-8 || Math.abs(lastTrail[1] - pos[1]) > 1e-8)) {
-    // Replace the last trail point with current position (live tip)
-    // We'll add a "live tip" that gets overwritten each frame
-    if (q.trail.length > 0 && (q.trail as any)._hasTip) {
-      q.trail[q.trail.length - 1] = [pos[0], pos[1]];
-    } else {
-      q.trail.push([pos[0], pos[1]]);
-      (q.trail as any)._hasTip = true;
-      if (q.trail.length > TRAIL_MAX_POINTS) q.trail.shift();
-    }
-  }
-
-  return pos;
+  return result;
 }
 
-/**
- * Compute arrow bearing from the last two trail points.
- * This is the actual direction the arrow just moved — always correct
- * regardless of shape direction or server bearing computation.
- */
-function bearingFromTrail(q: VehicleQueue): number {
-  if (q.trail.length < 2) return 0;
-  const a = q.trail[q.trail.length - 2]!;
-  const b = q.trail[q.trail.length - 1]!;
-  const dlon = b[0] - a[0];
-  const dlat = b[1] - a[1];
-  if (Math.abs(dlon) < 1e-9 && Math.abs(dlat) < 1e-9) return 0;
-  // atan2(dlon, dlat) gives bearing from north, clockwise
-  const rad = Math.atan2(dlon, dlat);
-  return ((rad * 180 / Math.PI) + 360) % 360;
+// ── Per-vehicle animation state ──
+// Each vehicle has a currentDist (where the arrow IS on the shape)
+// and a targetDist (where it should be, from the server).
+// Each frame, currentDist moves toward targetDist at the inferred speed.
+// When it reaches targetDist, the arrow stops until the next update.
+
+interface VehicleAnim {
+  currentDist: number;   // meters along shape — where the arrow is now
+  targetDist: number;    // meters along shape — where the server says it should be
+  speed: number;         // meters per second
+  direction: number;     // +1 or -1
+  shapeKey: string;
+  lastUpdateAt: number;  // ms — when targetDist was last set
 }
 
-// ── Backlog + tick feeding ──
+const anims = new Map<string, VehicleAnim>();
+
+// ~500m trail for all modes
+const TRAIL_DIST_M = 500;
+
+// ── Process incoming ticks ──
 
 export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {
-  if (backlog.length === 0) return;
-
+  // Process all ticks — each one updates targetDist.
+  // The last tick's targets become the starting animation state.
   for (const tick of backlog) {
-    feedTick(tick.vehicles);
+    feedTick(tick.vehicles, true);
   }
-
-  // Fast-forward through all but the last tick to pre-build trail
-  const ticksToConsume = backlog.length - 1;
-  if (ticksToConsume <= 0) return;
-
-  for (const [, q] of queues) {
-    if (q.speed <= 0 || q.totalDist <= 0) continue;
-    const targetDist = q.totalDist * (ticksToConsume / backlog.length);
-    // Advance in one step — advanceAndTrail handles moving points to trail
-    const fakeDt = targetDist / q.speed;
-    advanceAndTrail(q, fakeDt);
+  // Snap currentDist to targetDist for all vehicles (no animation for backlog)
+  for (const [, anim] of anims) {
+    anim.currentDist = anim.targetDist;
   }
 }
 
-export function feedTick(vehicles: VehiclePosition[]): void {
+export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
   const now = Date.now();
   const seen = new Set<string>();
 
   for (const v of vehicles) {
     seen.add(v.entityId);
-    let q = queues.get(v.entityId);
 
-    if (!q) {
-      q = {
-        points: [[v.longitude, v.latitude]],
-        dists: [0],
-        totalDist: 0,
-        playhead: 0,
-        speed: 0,
-        lastAppendAt: now,
-        trail: [],
-        mode: v.mode,
-      };
-      queues.set(v.entityId, q);
-    }
+    // Fetch route shape if not cached
+    fetchAndCacheShape(v);
 
-    const seg = v.pathSegment && v.pathSegment.length >= 2 ? v.pathSegment : null;
-    if (seg) {
-      // Sanity check: if the segment jumps too far from the queue's
-      // last point, it's a bad shape match — skip it to avoid
-      // trails cutting through buildings
-      const lastQueuePt = q.points[q.points.length - 1];
-      const segStart = seg[0]!;
-      let skip = false;
-      if (lastQueuePt) {
-        const jumpDist = degDist(lastQueuePt, segStart);
-        // ~0.001 degrees ≈ 100m — if the jump is bigger, skip
-        if (jumpDist > 0.003) skip = true;
-      }
+    const shapeKey = getShapeCacheKey(v);
+    const existing = anims.get(v.entityId);
 
-      if (!skip) {
-        const prevTotal = q.totalDist;
-        appendToQueue(q, seg);
-        const addedDist = q.totalDist - prevTotal;
-        const dt = now - q.lastAppendAt;
-        if (dt > 0 && addedDist > 0) {
-          q.speed = addedDist / dt;
+    if (existing && v.shapeDistTraveled >= 0) {
+      // Update target — vehicle moved to a new position on the shape
+      const prevTarget = existing.targetDist;
+      const newTarget = v.shapeDistTraveled;
+
+      if (Math.abs(newTarget - prevTarget) > 0.5) {
+        // Infer speed from distance / time between updates
+        const dt = (now - existing.lastUpdateAt) / 1000;
+        if (dt > 0) {
+          existing.speed = Math.abs(newTarget - prevTarget) / dt;
         }
-        q.lastAppendAt = now;
+        existing.direction = newTarget >= prevTarget ? 1 : -1;
+        existing.targetDist = newTarget;
+        existing.lastUpdateAt = now;
       }
+    } else if (!existing && v.shapeDistTraveled >= 0) {
+      // New vehicle
+      anims.set(v.entityId, {
+        currentDist: v.shapeDistTraveled,
+        targetDist: v.shapeDistTraveled,
+        speed: v.speed > 0 ? v.speed : 0,
+        direction: 1,
+        shapeKey,
+        lastUpdateAt: now,
+      });
     }
   }
 
-  for (const id of queues.keys()) {
-    if (!seen.has(id)) queues.delete(id);
+  // Remove departed
+  for (const id of anims.keys()) {
+    if (!seen.has(id)) anims.delete(id);
   }
 }
 
-// ── Compute display ──
+// ── Compute display positions for this frame ──
 
 export interface DisplayVehicle {
   entityId: string;
@@ -258,14 +210,13 @@ export interface DisplayVehicle {
   vehicleLabel: string;
 }
 
-export function computeFrame(
-  vehicles: VehiclePosition[],
-  dtMs: number,
-): DisplayVehicle[] {
+export function computeFrame(vehicles: VehiclePosition[], dtMs: number): DisplayVehicle[] {
   return vehicles.map((v) => {
-    const q = queues.get(v.entityId);
+    const anim = anims.get(v.entityId);
+    const shape = shapeCache.get(getShapeCacheKey(v));
 
-    if (!q || v.stale || q.speed <= 0) {
+    // No shape or no animation state — render at server position
+    if (!anim || !shape || v.stale) {
       return {
         entityId: v.entityId, mode: v.mode,
         position: [v.longitude, v.latitude] as [number, number],
@@ -275,20 +226,68 @@ export function computeFrame(
       };
     }
 
-    const pos = advanceAndTrail(q, dtMs);
+    // Advance currentDist toward targetDist at inferred speed
+    if (anim.speed > 0.5) {
+      const remaining = anim.targetDist - anim.currentDist;
+      const advance = anim.speed * (dtMs / 1000) * anim.direction;
 
-    // Bearing from actual movement direction (last two trail points)
-    const bearing = bearingFromTrail(q);
+      if (anim.direction > 0 && anim.currentDist < anim.targetDist) {
+        anim.currentDist = Math.min(anim.currentDist + advance, anim.targetDist);
+      } else if (anim.direction < 0 && anim.currentDist > anim.targetDist) {
+        anim.currentDist = Math.max(anim.currentDist + advance, anim.targetDist);
+      }
+      // If reached target, stop (wait for next update)
+    }
+
+    // Clamp to shape bounds
+    anim.currentDist = Math.max(0, Math.min(anim.currentDist, shape.totalDist));
+
+    // Sample position from the route shape
+    const pos = sampleShapeAtDist(shape, anim.currentDist);
+    if (!pos) {
+      return {
+        entityId: v.entityId, mode: v.mode,
+        position: [v.longitude, v.latitude] as [number, number],
+        angle: -v.bearing, stale: v.stale, speed: v.speed,
+        bearing: v.bearing, routeId: v.routeId,
+        vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
+      };
+    }
+
+    // Bearing from shape direction at current position
+    const bearing = bearingAtDist(shape, anim.currentDist, anim.direction);
 
     return {
       entityId: v.entityId, mode: v.mode,
       position: pos,
-      angle: bearing !== 0 ? -bearing : -v.bearing,
-      stale: v.stale, speed: v.speed,
-      bearing: bearing || v.bearing, routeId: v.routeId,
+      angle: -bearing,
+      stale: v.stale,
+      speed: anim.speed,
+      bearing,
+      routeId: v.routeId,
       vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
     };
   });
+}
+
+function bearingAtDist(shape: CachedShape, dist: number, direction: number): number {
+  const { path, dists } = shape;
+  if (path.length < 2) return 0;
+
+  let a = path[0]!, b = path[1]!;
+  for (let i = 0; i < path.length - 1; i++) {
+    if (dist >= dists[i]! && dist <= dists[i + 1]!) {
+      a = path[i]!; b = path[i + 1]!; break;
+    }
+  }
+  if (dist > dists[dists.length - 1]!) {
+    a = path[path.length - 2]!; b = path[path.length - 1]!;
+  }
+
+  const dlon = b[0] - a[0], dlat = b[1] - a[1];
+  let bearing = ((Math.atan2(dlon, dlat) * 180 / Math.PI) + 360) % 360;
+  if (direction < 0) bearing = (bearing + 180) % 360;
+  return bearing;
 }
 
 // ── Vehicle arrow layer ──
@@ -326,6 +325,8 @@ export function createVehicleLayer(
 }
 
 // ── Trail layer ──
+// Trail = the portion of the route shape behind the arrow.
+// Always on-route because it's sliced from the shape itself.
 
 interface TrailData {
   entityId: string;
@@ -345,10 +346,23 @@ export function createTrailLayer(
   const data: TrailData[] = [];
 
   for (const v of vehicles) {
-    const q = queues.get(v.entityId);
-    if (!q || q.trail.length < 2) continue;
+    if (v.stale) continue;
     if (hasSelection && v.entityId !== selectedId) continue;
-    data.push({ entityId: v.entityId, path: q.trail, mode: v.mode });
+
+    const anim = anims.get(v.entityId);
+    const shape = shapeCache.get(getShapeCacheKey(v));
+    if (!anim || !shape || anim.speed < 0.5) continue;
+
+    // Trail: slice of shape from (currentDist - TRAIL_DIST) to currentDist
+    const trailStart = anim.direction > 0
+      ? Math.max(0, anim.currentDist - TRAIL_DIST_M)
+      : Math.min(shape.totalDist, anim.currentDist + TRAIL_DIST_M);
+    const trailEnd = anim.currentDist;
+
+    const trailPath = sliceShape(shape, trailStart, trailEnd);
+    if (trailPath.length < 2) continue;
+
+    data.push({ entityId: v.entityId, path: trailPath, mode: v.mode });
   }
 
   return new PathLayer<TrailData>({
@@ -373,7 +387,7 @@ export function createTrailLayer(
   });
 }
 
-// ── Full route shape layer ──
+// ── Full route shape layer (on vehicle selection) ──
 
 export function createRouteShapeLayer(
   routeShape: Array<[number, number]> | null,

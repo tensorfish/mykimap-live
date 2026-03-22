@@ -232,21 +232,20 @@ function startServer(): void {
         });
       }
 
-      // Route shape endpoint — returns full polyline for a vehicle's route
+      // Route shape endpoint — returns full polyline with cumulative distances
       if (url.pathname.startsWith("/api/route-shape/")) {
         const tripId = decodeURIComponent(url.pathname.slice("/api/route-shape/".length));
         const routeId = url.searchParams.get("routeId") ?? "";
 
-        // Try trip_id first, fall back to route_id
         const shape = getShapeForTrip(tripId) ?? getShapeForRoute(routeId);
 
         if (!shape || shape.length === 0) {
-          return Response.json({ path: [] });
+          return Response.json({ path: [], dists: [] });
         }
 
-        // Return as [lon, lat][] for direct use by deck.gl
         const path = shape.map((p) => [p.lon, p.lat] as [number, number]);
-        return Response.json({ path });
+        const dists = shape.map((p) => p.dist); // cumulative meters
+        return Response.json({ path, dists });
       }
 
       // Serve client static files in production

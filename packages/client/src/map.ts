@@ -72,16 +72,14 @@ export function initMap(
     });
   });
 
-  // ── Data flow ──
+  // ── Data ──
 
   let currentVehicles: VehiclePosition[] = [];
 
-  // Handle initial backlog from server
   window.addEventListener("vehicle-backlog", ((e: CustomEvent) => {
     feedBacklog(e.detail.backlog);
   }) as EventListener);
 
-  // Handle regular ticks
   store.subscribe(() => {
     const vehicles = getVehicles();
     if (vehicles.length === 0) return;
@@ -90,9 +88,7 @@ export function initMap(
   });
 
   // ── 60fps render loop ──
-  // Walks each vehicle along its path queue at constant speed.
-  // The queue is fed by server ticks — animation is continuous
-  // because the queue always has segments ahead.
+  // Advances each arrow along its route shape toward the target distance.
 
   let lastFrameTime = performance.now();
 
