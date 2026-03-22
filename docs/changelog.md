@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+- Vehicles now render as **directional arrows** (IconLayer) instead of dots, rotated to match bearing
+- Added **snail trails** (PathLayer) behind each moving vehicle showing recent trajectory
+- Mode colors: blue (metro), green (tram), orange (bus), purple (V/Line)
+
 ### Added
 - Project scaffolding: Bun monorepo with `packages/server`, `packages/client`, and `docs/`
 - Server: GTFS-RT feed polling (10 feeds), protobuf decoding, position interpolation, WebSocket broadcast

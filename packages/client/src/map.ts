@@ -1,7 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
-import { store, getVehicles } from "./store.js";
-import { createVehicleLayer } from "./layers.js";
+import { store, getVehicles, getTrails } from "./store.js";
+import { createVehicleLayer, createTrailLayer } from "./layers.js";
 import { transition } from "./store.js";
 
 // Melbourne CBD
@@ -73,8 +73,12 @@ export function initMap(
   store.subscribe(() => {
     if (!deck) return;
     const vehicles = getVehicles();
+    const trails = getTrails();
     deck.setProps({
-      layers: [createVehicleLayer(vehicles)],
+      layers: [
+        createTrailLayer(vehicles, trails),
+        createVehicleLayer(vehicles),
+      ],
     });
   });
 

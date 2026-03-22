@@ -72,15 +72,17 @@ The server is authoritative — clients render exactly what the server sends. Th
 | Build | Vite |
 | State | TanStack Store |
 | Map tiles | Mapbox GL JS (dark-v11) |
-| Data rendering | deck.gl ScatterplotLayer |
+| Data rendering | deck.gl IconLayer (arrows) + PathLayer (trails) |
 | UI | Vanilla DOM |
 
 No React or any UI framework. The store subscription drives both the deck.gl layer updates and the status bar DOM mutations directly.
 
 ### Vehicle rendering
 
-- Each vehicle is a colored dot on the map
-- Colors: blue (metro), green (tram), orange (bus), purple (V/Line)
-- Stale vehicles are gray
-- Radius scales by mode (trains largest, buses smallest)
-- deck.gl's built-in `transitions` interpolate positions client-side between 1-second ticks
+- Each vehicle is a **directional arrow** that points in its direction of travel
+- **Colors by mode**: blue (metro train), green (tram), orange (bus), purple (V/Line)
+- Stale vehicles are dimmed gray
+- Arrow size scales by mode — trains largest, buses smallest
+- A **snail trail** (fading path) follows each moving vehicle, showing its recent trajectory
+- Trails are drawn as `PathLayer` underneath the arrows, using matching mode colors at reduced opacity
+- Arrow rotation and position both use deck.gl's built-in `transitions` for smooth animation between 1-second server ticks
