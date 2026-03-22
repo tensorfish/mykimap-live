@@ -1,4 +1,4 @@
-import { store, selectVehicle, getAlerts } from "./store.js";
+import { store, selectVehicle } from "./store.js";
 import type { VehiclePosition, TransportMode, ServiceAlert } from "./types.js";
 
 const MODE_LABELS: Record<TransportMode, string> = {
@@ -15,18 +15,12 @@ const MODE_BADGE_COLORS: Record<TransportMode, string> = {
   vline: "#A57FB2",
 };
 
-/**
- * Initialize the vehicle info panel.
- * Binds the close button and subscribes to store for selection changes.
- */
 export function initPanel(): void {
   const panel = document.getElementById("panel")!;
   const closeBtn = document.getElementById("panel-close")!;
   const content = document.getElementById("panel-content")!;
 
-  closeBtn.addEventListener("click", () => {
-    selectVehicle(null);
-  });
+  closeBtn.addEventListener("click", () => selectVehicle(null));
 
   store.subscribe(() => {
     const { selectedEntityId, worldState } = store.state;
@@ -55,9 +49,7 @@ function renderPanel(v: VehiclePosition, alerts: ServiceAlert[]): string {
   const badgeColor = MODE_BADGE_COLORS[v.mode];
   const speedKmh = (v.speed * 3.6).toFixed(0);
   const routeShort = extractRouteShort(v.routeId, v.mode);
-  const lastUpdate = formatTimestamp(v.timestamp);
 
-  // Find alerts affecting this vehicle's route
   const routeAlerts = alerts.filter((a) =>
     a.informedEntities.some((e) => e.routeId === v.routeId)
   );
@@ -65,13 +57,9 @@ function renderPanel(v: VehiclePosition, alerts: ServiceAlert[]): string {
   let html = `
     <span class="panel-mode-badge" style="background:${badgeColor};color:#000">${mode}</span>
     <h2>Route ${routeShort}</h2>
-
-    <div class="panel-field">
-      <div class="panel-field-label">Vehicle ID</div>
-      <div class="panel-field-value">${v.vehicleId || "—"}</div>
-    </div>
   `;
 
+  // Vehicle class (trams only — skip for other modes)
   if (v.vehicleLabel) {
     html += `
     <div class="panel-field">
@@ -81,46 +69,46 @@ function renderPanel(v: VehiclePosition, alerts: ServiceAlert[]): string {
     `;
   }
 
-  html += `
+  // Speed — only show if moving
+  if (v.speed >= 0.5) {
+    html += `
     <div class="panel-field">
       <div class="panel-field-label">Speed</div>
       <div class="panel-field-value">${speedKmh} km/h</div>
     </div>
+    `;
+  }
 
+  // Departure time
+  if (v.startTime) {
+    html += `
     <div class="panel-field">
-      <div class="panel-field-label">Bearing</div>
-      <div class="panel-field-value">${v.bearing.toFixed(0)}° ${bearingLabel(v.bearing)}</div>
-    </div>
-
-    <div class="panel-field">
-      <div class="panel-field-label">Position</div>
-      <div class="panel-field-value">${v.latitude.toFixed(5)}, ${v.longitude.toFixed(5)}</div>
-    </div>
-
-    <div class="panel-field">
-      <div class="panel-field-label">Trip ID</div>
-      <div class="panel-field-value" style="font-size:11px;word-break:break-all">${v.tripId}</div>
-    </div>
-
-    <div class="panel-field">
-      <div class="panel-field-label">Start Time</div>
+      <div class="panel-field-label">Departed</div>
       <div class="panel-field-value">${v.startTime}</div>
     </div>
+    `;
+  }
 
+  // Last update — human readable
+  html += `
     <div class="panel-field">
-      <div class="panel-field-label">Last Update</div>
-      <div class="panel-field-value">${lastUpdate}</div>
-    </div>
-
-    <div class="panel-field">
-      <div class="panel-field-label">Status</div>
-      <div class="panel-field-value">${v.stale ? "⚠ Stale — position may be outdated" : "● Active"}</div>
+      <div class="panel-field-label">Last update</div>
+      <div class="panel-field-value">${timeAgo(v.timestamp)}</div>
     </div>
   `;
 
+  // Status — only show if stale
+  if (v.stale) {
+    html += `
+    <div class="panel-field">
+      <div class="panel-field-value" style="color:#f0ad4e">⚠ Position may be outdated</div>
+    </div>
+    `;
+  }
+
+  // Alerts
   if (routeAlerts.length > 0) {
     html += `<hr class="panel-divider">`;
-    html += `<div class="panel-field-label" style="margin-bottom:8px">ALERTS (${routeAlerts.length})</div>`;
     for (const a of routeAlerts) {
       html += `
       <div class="panel-alert">
@@ -136,20 +124,20 @@ function renderPanel(v: VehiclePosition, alerts: ServiceAlert[]): string {
 
 function extractRouteShort(routeId: string, mode: TransportMode): string {
   if (mode === "bus") return routeId;
-  // aus:vic:vic-03-96: → 96
   const match = routeId.match(/-(\w+):$/);
   return match ? match[1]! : routeId;
 }
 
-function bearingLabel(deg: number): string {
-  const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  return dirs[Math.round(deg / 45) % 8]!;
-}
-
-function formatTimestamp(posix: number): string {
+function timeAgo(posix: number): string {
   if (!posix) return "—";
-  const d = new Date(posix * 1000);
-  return d.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const seconds = Math.floor(Date.now() / 1000) - posix;
+  if (seconds < 0) return "just now";
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m ago`;
 }
 
 function escapeHtml(s: string): string {
