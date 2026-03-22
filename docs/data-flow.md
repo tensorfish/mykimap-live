@@ -99,16 +99,16 @@ stateDiagram-v2
 
 ## Future: time machine
 
-The architecture is designed so that historical playback can be added without rewriting the rendering pipeline.
+DuckDB on both sides. Server writes, client reads.
 
-**Server side:** After `processSnapshot()`, each enriched snapshot can be written to a daily Parquet file (`.data/snapshots/YYYY-MM-DD.parquet`). This is a future recorder module — the hook point exists in `pollCycle()` between snapshot processing and broadcast.
+**Server:** After each `processSnapshot()`, batch-insert the enriched snapshot into a local DuckDB database (`.data/snapshots/YYYY-MM-DD.duckdb`). One file per day, auto-rotated. `GET /data/snapshots/:date` exports to Parquet.
 
-**Client side:** DuckDB-WASM loads a Parquet file in the browser, queries by timestamp range, and feeds results into the same `applyTick()` → store → layers pipeline used for live data. The rendering code doesn't know or care whether the data is live or historical.
+**Client:** DuckDB-WASM loads the Parquet file in the browser. A time slider queries by timestamp and feeds results into the same `applyTick()` → store → layers pipeline. The rendering code doesn't know or care whether data is live or historical.
 
 **Invariants that make this possible:**
 - `WorldState` is the single interchange format (live and playback produce the same shape)
 - `applyTick()` accepts any `WorldState` regardless of source
-- `PollResult` is a pure serializable data object (can be written to disk)
+- `PollResult` is serializable (can be inserted into DuckDB)
 
 See `.memory/future-time-machine.md` for the full design.
 

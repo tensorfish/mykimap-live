@@ -18,71 +18,95 @@ The live map is interesting for 30 seconds. A time-lapse of an entire city's tra
 |---|---|
 | Snapshot size | ~2,000 vehicles × ~100 bytes ≈ 200 KB |
 | Snapshots per day | ~12,300 (one per 7s poll) |
+| Rows per day | ~24.6M (2,000 vehicles × 12,300 snapshots) |
 | Raw daily volume | ~2.4 GB |
-| Delta-compressed | Estimated < 500 MB/day (most vehicles don't move between consecutive 7s polls) |
+| DuckDB compressed | Estimated < 300 MB/day (columnar compression, many repeated positions between 7s polls) |
 
-## Architecture
+---
 
-### Server: snapshot recording
+## Architecture: DuckDB everywhere
 
-The server already decodes and enriches every poll result into a `PollResult` (see `poller/index.ts`). The recording hook goes here — after decode, before interpolation.
+DuckDB on both sides. Server writes. Client reads. Same engine, same query language, same data format.
 
-**Seam point:** `pollCycle()` in `index.ts`. After `processSnapshot()` returns, the snapshot is complete and enriched (snapped positions, speed, bearing). This is where a recorder would persist it.
+### Server: DuckDB recording
+
+The server runs a local DuckDB instance. After each poll cycle, it inserts the enriched snapshot into a table. One database file per day, auto-rotated at midnight.
+
+**Seam point:** `pollCycle()` in `index.ts`. After `processSnapshot()` returns, the snapshot is complete and enriched (snapped positions, speed, bearing). This is where the recorder inserts.
 
 ```
 pollCycle()
   → poll()                    # fetch + decode
   → processSnapshot()         # snap, speed, bearing
-  → recorder.write(snapshot)  # ← FUTURE: persist to disk
+  → recorder.insert(snapshot) # ← insert into DuckDB
   → broadcast continues as normal
 ```
 
-The recorder must:
-- Write each snapshot with its `headerTimestamp` as the key
-- Write to local disk, not a remote service — one Parquet file per day
-- Be non-blocking — poll/broadcast must not wait on disk I/O
-- Be optional — if recording is disabled, zero overhead
+**DuckDB server-side details:**
 
-**File format:** Parquet. Each row is one vehicle at one timestamp. Columns: `timestamp`, `entityId`, `mode`, `routeId`, `latitude`, `longitude`, `bearing`, `speed`, `stale`. Parquet gives columnar compression (great for the many-identical-positions-between-polls case) and is directly queryable by DuckDB.
+- **Library:** `duckdb` (Node-API bindings, works with Bun)
+- **Storage:** `.data/snapshots/YYYY-MM-DD.duckdb` — one file per day
+- **Table schema:**
 
-**Storage path:** `.data/snapshots/YYYY-MM-DD.parquet`
+```sql
+CREATE TABLE snapshots (
+  timestamp  UINTEGER,     -- POSIX seconds
+  entity_id  VARCHAR,
+  mode       VARCHAR,       -- 'metro', 'tram', 'bus', 'vline'
+  route_id   VARCHAR,
+  vehicle_id VARCHAR,
+  latitude   FLOAT,
+  longitude  FLOAT,
+  bearing    FLOAT,
+  speed      FLOAT,
+  stale      BOOLEAN,
+  shape_dist FLOAT
+);
+```
 
-### Client: DuckDB-powered playback
+- **Write strategy:** Batch insert after each poll — one `INSERT INTO snapshots VALUES (?, ?, ...), (?, ?, ...), ...` with ~2,000 rows. DuckDB handles this in < 10ms.
+- **Non-blocking:** The insert is fire-and-forget with error logging. Poll/broadcast must not wait on slow disk.
+- **Optional:** Controlled by `RECORDING_ENABLED` env var (default: `false`). When disabled, no DuckDB instance is created, zero overhead.
+- **Retention:** Configurable via `RECORDING_RETENTION_DAYS` env var (default: `30`). On startup, delete `.duckdb` files older than the threshold.
+- **Export endpoint:** `GET /data/snapshots/:date` exports a day's data as Parquet for the client to download. DuckDB does this natively: `COPY (SELECT * FROM snapshots) TO '/tmp/export.parquet' (FORMAT PARQUET)`.
 
-The client downloads the Parquet file for a requested day and queries it locally using [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview). No server-side query engine needed.
+### Client: DuckDB-WASM playback
 
-**Why DuckDB-WASM on the client:**
-- Parquet files are static — serve from any CDN or the server's `/data` endpoint
-- DuckDB-WASM runs entirely in the browser, queries Parquet directly
-- Range queries are fast: `SELECT * FROM 'day.parquet' WHERE timestamp BETWEEN x AND y`
-- No server load for playback — scales to unlimited concurrent viewers
-- The server stays simple (just writes files)
+The client downloads a Parquet export for a requested day and queries it locally using [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview). All playback queries run in the browser — no server load.
+
+**Why DuckDB on both sides:**
+- Server uses DuckDB for append-heavy time-series writes (columnar, compressed, fast batch inserts)
+- Client uses DuckDB-WASM to query the same data with the same SQL
+- Export is a single `COPY TO PARQUET` — no custom serialization
+- Parquet files are static once exported — cacheable by CDN or browser
 
 **Playback flow:**
-1. User picks a date → client fetches `/data/snapshots/2026-03-22.parquet` (or range of partial files)
-2. DuckDB-WASM opens the file in the browser
+1. User picks a date → client fetches `GET /data/snapshots/2026-03-22` → receives Parquet file
+2. DuckDB-WASM opens the Parquet file in the browser
 3. Time slider controls a `playbackTimestamp`
-4. On each animation frame, query: `SELECT * FROM snap WHERE timestamp = closest(playbackTimestamp)`
-5. Feed the result into the same store → same layers render it
-6. The store already accepts a `WorldState` via `applyTick()` — playback just supplies synthetic ticks
+4. On each frame: `SELECT * FROM snap WHERE timestamp = (SELECT MAX(timestamp) FROM snap WHERE timestamp <= ?)`
+5. Map result rows to `VehiclePosition[]` → construct `WorldState` → feed `applyTick()`
+6. Same store → same layers → same rendering. Live and playback are indistinguishable.
 
-**Key constraint:** The `applyTick()` function and the entire rendering pipeline (store → layers → deck.gl) must not care whether the data came from a live WebSocket tick or a historical DuckDB query. Same `WorldState` shape, same code path.
+**Key constraint:** `applyTick()` and the rendering pipeline must not care whether the data came from a live WebSocket tick or a historical DuckDB query. Same `WorldState` shape, same code path.
 
-### What must be true in the current architecture
+---
 
-These are the seams. If any of these are violated, the time machine becomes a rewrite instead of an addition.
+## Architectural seams (must preserve)
 
-1. **`PollResult` is a pure data object.** It has no side effects, no WebSocket references, no timers. It can be serialized to disk. ✅ Already true.
+If any of these are violated, the time machine becomes a rewrite instead of an addition.
 
-2. **`processSnapshot()` is a pure function of (vehicles, headerTimestamp).** It reads from `vehicleStates` (internal mutable map) but the output is a standalone array. The snapshot after processing is self-contained. ✅ Already true — the output `VehiclePosition[]` has everything needed to render.
+1. **`PollResult` is a pure serializable data object.** No side effects, no socket references. It can be inserted into a database. ✅ Already true.
 
-3. **`WorldState` is the single interchange format between server and client.** Both live broadcast and future playback must produce the same shape. ✅ Already true.
+2. **`processSnapshot()` output is self-contained.** The `VehiclePosition[]` after processing has everything needed to render (lat, lon, bearing, speed, mode, route). ✅ Already true.
 
-4. **`applyTick()` in the client store accepts any `WorldState` regardless of source.** ✅ Already true — it just sets the state.
+3. **`WorldState` is the single interchange format.** Live broadcast and historical playback produce the same shape. ✅ Already true.
 
-5. **The client rendering pipeline has no dependency on WebSocket liveness.** Layers render from store state, not from the connection. ✅ Already true — if you call `applyTick()` manually from devtools, it renders.
+4. **`applyTick()` accepts any `WorldState` regardless of source.** ✅ Already true.
 
-6. **The server's `/health` or a new `/data` endpoint can serve static Parquet files.** ⚠️ Not yet implemented but trivial to add — Bun.serve can serve static files from a directory.
+5. **Client rendering has no dependency on WebSocket liveness.** Layers render from store state. ✅ Already true.
+
+6. **The server exposes an HTTP endpoint for snapshot export.** ⚠️ Not yet implemented. Requires a `/data/snapshots/:date` route that runs `COPY TO PARQUET` and streams the result.
 
 ### What must NOT change
 
@@ -93,23 +117,51 @@ These are the seams. If any of these are violated, the time machine becomes a re
 
 ---
 
-## Implementation phases (future)
+## Config additions (future)
 
-### Phase A: Server-side recording
-- Add `recorder/` module to server
-- Write enriched snapshots to `.data/snapshots/YYYY-MM-DD.parquet` after each poll
-- Add `RECORDING_ENABLED` env var (default: false)
-- Add `/data/snapshots/:filename` static file endpoint
+```env
+# Recording
+RECORDING_ENABLED=false
+RECORDING_RETENTION_DAYS=30
+RECORDING_DATA_DIR=.data/snapshots
+```
+
+---
+
+## Implementation phases
+
+### Phase A: Server-side DuckDB recording
+- Add `duckdb` dependency to server
+- Add `recorder/` module: init DuckDB, create table, batch insert after each poll
+- Add `RECORDING_ENABLED`, `RECORDING_RETENTION_DAYS`, `RECORDING_DATA_DIR` env vars
+- Add retention cleanup on startup (delete old `.duckdb` files)
+- Non-fatal: if DuckDB init fails, log warning and continue without recording
 - No client changes
 
-### Phase B: Client-side playback
-- Add `duckdb-wasm` to client dependencies
-- Add date picker + time slider UI
-- Add playback engine: load Parquet → query by timestamp → feed `applyTick()`
-- Toggle between live mode and playback mode (mutually exclusive — live WS disconnects during playback)
+**Validation:** Enable recording, run server for 5 minutes. `.data/snapshots/YYYY-MM-DD.duckdb` exists. Query it with `duckdb` CLI: `SELECT COUNT(*) FROM snapshots` returns > 0. `SELECT COUNT(DISTINCT timestamp) FROM snapshots` shows ~43 distinct timestamps (5 min ÷ 7s). Disable recording, restart — no `.duckdb` file created.
+
+### Phase B: Parquet export endpoint
+- Add `GET /data/snapshots/:date` to server HTTP routes
+- Handler runs `COPY TO PARQUET`, streams the file to the client
+- Add `GET /data/snapshots` to list available dates
+- Cache exported Parquet files (avoid re-exporting the same day repeatedly)
+
+**Validation:** `curl http://localhost:3000/data/snapshots/2026-03-22 -o day.parquet`. Open with `duckdb`: `SELECT COUNT(*) FROM 'day.parquet'` returns rows. `curl http://localhost:3000/data/snapshots` returns a JSON array of available dates.
+
+### Phase C: Client-side DuckDB-WASM playback
+- Add `@duckdb/duckdb-wasm` to client dependencies
+- Add date picker UI
+- Add time slider UI (scrubber bar at bottom of screen)
+- Add playback engine: fetch Parquet → init DuckDB-WASM → query by timestamp → map to `WorldState` → `applyTick()`
+- Toggle between live mode and playback mode (mutually exclusive — live WS pauses during playback)
 - Trail rendering works automatically (store already tracks positions)
 
-### Phase C: Day compression
-- "Play day" button: compress 24h into 60s (or user-controlled speed)
+**Validation:** Pick a recorded day. Drag the time slider — vehicles jump to their historical positions. Hit play — vehicles animate through the day. Switch back to live mode — WebSocket reconnects, live data resumes.
+
+### Phase D: Day compression / timelapse
+- "Play day" button: compress 24h into configurable duration
 - Playback speed: 1×, 10×, 60×, 360× (1 second = 1 hour)
-- Progress bar showing time-of-day
+- Progress bar showing time-of-day with sunrise/sunset markers
+- Vehicle count graph overlay (mini sparkline showing network activity over the day)
+
+**Validation:** Play a full day at 360×. 24h completes in ~4 minutes. The morning rush is visible as a burst of arrows. Late night shows a sparse network. Vehicle count sparkline peaks match rush hours.

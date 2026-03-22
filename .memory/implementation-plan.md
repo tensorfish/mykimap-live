@@ -242,14 +242,88 @@ The scaffolding is done. The code compiles. Nothing has been tested end-to-end. 
 
 ---
 
+---
+
+## Phase 7 — Time machine: server-side recording
+
+### Step 29: DuckDB initializes on boot
+
+**Goal:** When `RECORDING_ENABLED=true`, the server creates a DuckDB instance and a `snapshots` table in `.data/snapshots/YYYY-MM-DD.duckdb` on boot. When disabled, no DuckDB instance is created.
+
+**Validation:** Set `RECORDING_ENABLED=true`, start server. `.data/snapshots/YYYY-MM-DD.duckdb` file exists. Server logs confirming DuckDB initialized. Set `RECORDING_ENABLED=false`, restart — no `.duckdb` file created, no DuckDB-related logs.
+
+---
+
+### Step 30: Snapshots are recorded after each poll
+
+**Goal:** After each `processSnapshot()`, the enriched `VehiclePosition[]` is batch-inserted into the DuckDB `snapshots` table. Recording does not block poll/broadcast.
+
+**Validation:** Run server with recording enabled for 2 minutes. Open the `.duckdb` file with the `duckdb` CLI. `SELECT COUNT(*) FROM snapshots` returns > 0. `SELECT COUNT(DISTINCT timestamp) FROM snapshots` returns ~17 (2 min ÷ 7s). `SELECT DISTINCT mode FROM snapshots` returns `metro`, `tram`, `bus`, `vline`.
+
+---
+
+### Step 31: Retention cleanup
+
+**Goal:** On startup, `.duckdb` files in the data directory older than `RECORDING_RETENTION_DAYS` are deleted.
+
+**Validation:** Create a dummy `.duckdb` file with a date 60 days ago. Set `RECORDING_RETENTION_DAYS=30`, start server. The old file is deleted. Today's file is kept.
+
+---
+
+### Step 32: Parquet export endpoint
+
+**Goal:** `GET /data/snapshots/:date` exports that day's DuckDB data as a Parquet file. `GET /data/snapshots` lists available dates.
+
+**Validation:** Record for 5 minutes. `curl http://localhost:3000/data/snapshots` returns a JSON array containing today's date. `curl http://localhost:3000/data/snapshots/YYYY-MM-DD -o day.parquet` downloads a file. Open with `duckdb` CLI: `SELECT COUNT(*) FROM 'day.parquet'` returns rows matching the DuckDB table count.
+
+---
+
+## Phase 8 — Time machine: client-side playback
+
+### Step 33: DuckDB-WASM loads a Parquet file
+
+**Goal:** The client can fetch a Parquet export from the server and open it with DuckDB-WASM in the browser.
+
+**Validation:** Open devtools console. Manually trigger a fetch of `/data/snapshots/YYYY-MM-DD`, load into DuckDB-WASM, run `SELECT COUNT(*) FROM snap`. Returns > 0.
+
+---
+
+### Step 34: Date picker and time slider
+
+**Goal:** A date picker lets the user select a recorded day. A time slider (scrubber bar) at the bottom of the screen controls the playback timestamp.
+
+**Validation:** Date picker shows only dates that have recordings (from `/data/snapshots` endpoint). Selecting a date loads the Parquet file. The time slider range is the min/max timestamp in the file. Dragging the slider updates a displayed time-of-day label.
+
+---
+
+### Step 35: Playback feeds the rendering pipeline
+
+**Goal:** Dragging the time slider queries DuckDB-WASM for vehicle positions at that timestamp, constructs a `WorldState`, and feeds it to `applyTick()`. Vehicles appear at their historical positions on the map.
+
+**Validation:** Drag the slider to a rush-hour timestamp. ~2,000 arrows appear. Drag to 3am. Far fewer arrows. Arrows are positioned on roads/tracks (same shape data used for live rendering). Trails build as the slider moves forward.
+
+---
+
+### Step 36: Live/playback mode toggle
+
+**Goal:** The client toggles between live mode (WebSocket) and playback mode (DuckDB-WASM). They are mutually exclusive — entering playback pauses the WebSocket; returning to live reconnects it.
+
+**Validation:** In live mode, vehicles move in real time. Click "History" → select a date → live WebSocket pauses, playback slider appears. Click "Live" → slider disappears, WebSocket reconnects, real-time data resumes. No page reload.
+
+---
+
+### Step 37: Animated playback with speed control
+
+**Goal:** A play button auto-advances the time slider. Speed controls: 1×, 10×, 60×, 360× (1 second of wall clock = 1/10/60/360 seconds of historical time).
+
+**Validation:** Hit play at 1×. Vehicles move at real-time speed across the map. Switch to 360×. A full 24-hour day completes in ~4 minutes. The morning rush is visible as a burst of arrows. Pause works. Scrubbing during playback stops auto-advance.
+
+---
+
 ## Done criteria
 
-All 28 steps pass their validation tests. The system:
+Steps 1–28 are the core system. Steps 29–37 are the time machine.
 
-- Boots from cold start (downloads GTFS, loads shapes, polls feeds)
-- Produces smooth, road-following vehicle positions
-- Broadcasts to multiple clients in sync
-- Renders ~2,000 moving arrows with trails on a dark map
-- Handles disconnects, stale data, and missing config gracefully
-- Builds for production
-- Has working documentation
+**Core done (steps 1–28):** Boots from cold start, produces smooth road-following positions, broadcasts to synced clients, renders ~2,000 moving arrows with trails, handles edge cases, builds for production, docs work.
+
+**Time machine done (steps 29–37):** Server records every poll to DuckDB, exports daily Parquet files, client loads them with DuckDB-WASM, date picker + time slider + speed controls let you scrub through and timelapse any recorded day.

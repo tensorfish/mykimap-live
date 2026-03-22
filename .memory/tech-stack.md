@@ -92,8 +92,8 @@ Every frontend receives the same broadcast at the same server tick. Clients don'
 
 ## What's intentionally absent
 
-- **No database — for now.** Vehicle state is ephemeral in-memory. Future: server will write snapshots to daily Parquet files, client will query them with DuckDB-WASM for historical playback. See [future-time-machine.md](future-time-machine.md).
-- **No REST API.** All live client-server communication is WebSocket. Future: a `/data/snapshots/` static file endpoint for Parquet files.
+- **No database — for now.** Live vehicle state is ephemeral in-memory. Future: DuckDB on both sides — server writes snapshots to daily `.duckdb` files, exports to Parquet; client loads Parquet with DuckDB-WASM for historical playback. See [future-time-machine.md](future-time-machine.md).
+- **No REST API — for now.** All live client-server communication is WebSocket. Future: `GET /data/snapshots/:date` serves Parquet exports, `GET /data/snapshots` lists available dates.
 - **No authentication.** This is a public visualisation tool.
 - **No UI framework.** Vanilla TS + TanStack Store + direct DOM. No React, no virtual DOM.
 
