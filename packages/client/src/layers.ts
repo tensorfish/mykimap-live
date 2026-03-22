@@ -14,8 +14,6 @@ const MODE_COLORS: Record<TransportMode, [number, number, number]> = {
 const STALE_COLOR: [number, number, number] = [100, 100, 100];
 const DIMMED_COLOR: [number, number, number, number] = [80, 80, 80, 80];
 
-// ── Sizing ──
-
 const MODE_SIZE: Record<TransportMode, number> = {
   metro: 28,
   tram: 22,
@@ -31,43 +29,146 @@ function getArrowIconUrl(): string {
   return arrowIconUrl;
 }
 
-// ── Client-side lerp state ──
+// ── Continuous projection state ──
+//
+// Each vehicle has an "anchor" — its last known server position.
+// Every frame, we project forward from the anchor using speed + bearing.
+// When a new tick arrives, we smoothly blend from the projected position
+// to the new anchor over CORRECTION_MS to avoid snapping.
 
-interface PrevState {
+const DEG_TO_RAD = Math.PI / 180;
+
+interface Anchor {
+  /** Server-sent position (the ground truth) */
   lon: number;
   lat: number;
   bearing: number;
-  timestamp: number;
+  speed: number; // m/s
+  /** When this anchor was received */
+  receivedAt: number;
+  /** Position we were projecting to when the correction started */
+  correctionFromLon: number;
+  correctionFromLat: number;
+  correctionFromBearing: number;
+  /** Whether we're in a correction blend */
+  correcting: boolean;
 }
 
-const prevPositions = new Map<string, PrevState>();
-const LERP_DURATION = 1000;
+const anchors = new Map<string, Anchor>();
+const CORRECTION_MS = 300; // Blend from projected → new anchor over this duration
 
-export function snapshotPositions(vehicles: VehiclePosition[]): void {
+/**
+ * Called when a new server tick arrives.
+ * Updates anchors for all vehicles. If a vehicle was already being
+ * projected, we record where it was so we can blend to the new position.
+ */
+export function updateAnchors(vehicles: VehiclePosition[]): void {
   const now = Date.now();
   const seen = new Set<string>();
 
   for (const v of vehicles) {
     seen.add(v.entityId);
-    const prev = prevPositions.get(v.entityId);
-    if (prev) {
-      if (prev.lon !== v.longitude || prev.lat !== v.latitude) {
-        prev.lon = v.longitude;
-        prev.lat = v.latitude;
-        prev.bearing = v.bearing;
-        prev.timestamp = now;
-      }
-    } else {
-      prevPositions.set(v.entityId, {
-        lon: v.longitude, lat: v.latitude,
-        bearing: v.bearing, timestamp: now,
+    const existing = anchors.get(v.entityId);
+
+    if (existing && (existing.lon !== v.longitude || existing.lat !== v.latitude)) {
+      // Vehicle moved — record where we were projecting to, then update anchor
+      const projected = projectFromAnchor(existing, now);
+      existing.correctionFromLon = projected[0];
+      existing.correctionFromLat = projected[1];
+      existing.correctionFromBearing = existing.bearing;
+      existing.correcting = true;
+      existing.lon = v.longitude;
+      existing.lat = v.latitude;
+      existing.bearing = v.bearing;
+      existing.speed = v.speed;
+      existing.receivedAt = now;
+    } else if (!existing) {
+      // New vehicle — no correction needed, just set anchor
+      anchors.set(v.entityId, {
+        lon: v.longitude,
+        lat: v.latitude,
+        bearing: v.bearing,
+        speed: v.speed,
+        receivedAt: now,
+        correctionFromLon: v.longitude,
+        correctionFromLat: v.latitude,
+        correctionFromBearing: v.bearing,
+        correcting: false,
       });
+    } else {
+      // Same position — just update speed/bearing if changed
+      existing.speed = v.speed;
+      if (v.bearing !== 0) existing.bearing = v.bearing;
     }
   }
 
-  for (const id of prevPositions.keys()) {
-    if (!seen.has(id)) prevPositions.delete(id);
+  for (const id of anchors.keys()) {
+    if (!seen.has(id)) anchors.delete(id);
   }
+}
+
+/**
+ * Project a vehicle forward from its anchor by elapsed time.
+ * Simple flat-earth approximation — accurate enough for < 30s of projection.
+ */
+function projectFromAnchor(a: Anchor, now: number): [number, number] {
+  if (a.speed < 0.5) return [a.lon, a.lat];
+
+  const elapsedSec = (now - a.receivedAt) / 1000;
+  const distM = a.speed * elapsedSec;
+
+  const bearingRad = a.bearing * DEG_TO_RAD;
+  const latOffset = (distM * Math.cos(bearingRad)) / 111_000;
+  const lonOffset = (distM * Math.sin(bearingRad)) / (111_000 * Math.cos(a.lat * DEG_TO_RAD));
+
+  return [a.lon + lonOffset, a.lat + latOffset];
+}
+
+/**
+ * Get the display position for a vehicle right now.
+ * Projects forward from anchor, with correction blending if needed.
+ */
+function getDisplayPosition(entityId: string, serverLon: number, serverLat: number, now: number): [number, number] {
+  const a = anchors.get(entityId);
+  if (!a) return [serverLon, serverLat];
+
+  // Project forward from the anchor
+  const projected = projectFromAnchor(a, now);
+
+  if (!a.correcting) return projected;
+
+  // Blend from old projected position to new projected position
+  const correctionElapsed = now - a.receivedAt;
+  if (correctionElapsed >= CORRECTION_MS) {
+    a.correcting = false;
+    return projected;
+  }
+
+  const t = correctionElapsed / CORRECTION_MS;
+  // Ease out for smooth deceleration into the correct position
+  const ease = 1 - (1 - t) * (1 - t);
+
+  return [
+    a.correctionFromLon + ease * (projected[0] - a.correctionFromLon),
+    a.correctionFromLat + ease * (projected[1] - a.correctionFromLat),
+  ];
+}
+
+function getDisplayBearing(entityId: string, serverBearing: number, now: number): number {
+  const a = anchors.get(entityId);
+  if (!a || !a.correcting) return -serverBearing;
+
+  const correctionElapsed = now - a.receivedAt;
+  if (correctionElapsed >= CORRECTION_MS) return -serverBearing;
+
+  const t = correctionElapsed / CORRECTION_MS;
+  const ease = 1 - (1 - t) * (1 - t);
+  let from = -a.correctionFromBearing;
+  let to = -serverBearing;
+  let diff = to - from;
+  if (diff > 180) diff -= 360;
+  if (diff < -180) diff += 360;
+  return from + ease * diff;
 }
 
 // ── Vehicle arrow layer ──
@@ -85,17 +186,7 @@ export function createVehicleLayer(
     iconAtlas: getArrowIconUrl(),
     iconMapping: ARROW_ICON_MAPPING,
     getIcon: () => "arrow",
-    getPosition: (d) => {
-      const prev = prevPositions.get(d.entityId);
-      if (!prev) return [d.longitude, d.latitude];
-      const elapsed = now - prev.timestamp;
-      if (elapsed >= LERP_DURATION) return [d.longitude, d.latitude];
-      const t = elapsed / LERP_DURATION;
-      return [
-        prev.lon + t * (d.longitude - prev.lon),
-        prev.lat + t * (d.latitude - prev.lat),
-      ];
-    },
+    getPosition: (d) => getDisplayPosition(d.entityId, d.longitude, d.latitude, now),
     getColor: (d) => {
       if (hasSelection && d.entityId !== selectedId) return DIMMED_COLOR;
       if (d.stale) return [...STALE_COLOR, 160];
@@ -105,17 +196,7 @@ export function createVehicleLayer(
       if (hasSelection && d.entityId === selectedId) return MODE_SIZE[d.mode] * 1.4;
       return MODE_SIZE[d.mode];
     },
-    getAngle: (d) => {
-      const prev = prevPositions.get(d.entityId);
-      if (!prev) return -d.bearing;
-      const elapsed = now - prev.timestamp;
-      if (elapsed >= LERP_DURATION) return -d.bearing;
-      const t = elapsed / LERP_DURATION;
-      let from = -prev.bearing, to = -d.bearing, diff = to - from;
-      if (diff > 180) diff -= 360;
-      if (diff < -180) diff += 360;
-      return from + t * diff;
-    },
+    getAngle: (d) => getDisplayBearing(d.entityId, d.bearing, now),
     sizeScale: 1,
     sizeUnits: "pixels" as const,
     sizeMinPixels: 8,
@@ -155,7 +236,6 @@ export function createTrailLayer(
     if (path.length < 2) continue;
     const mode = modeMap.get(entityId);
     if (!mode) continue;
-    // When a vehicle is selected, only show its trail
     if (hasSelection && entityId !== selectedId) continue;
     data.push({ entityId, path, mode });
   }
@@ -166,7 +246,6 @@ export function createTrailLayer(
     getPath: (d) => d.path,
     getColor: (d) => {
       const [r, g, b] = MODE_COLORS[d.mode];
-      // Brighter trail for selected vehicle
       if (hasSelection && d.entityId === selectedId) return [r, g, b, 200];
       return [r, g, b, 100];
     },

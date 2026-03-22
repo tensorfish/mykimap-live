@@ -2,7 +2,7 @@ import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition } from "./types.js";
 import { store, getVehicles, getTrails, getSelectedEntityId, selectVehicle } from "./store.js";
-import { createVehicleLayer, createTrailLayer, snapshotPositions } from "./layers.js";
+import { createVehicleLayer, createTrailLayer, updateAnchors } from "./layers.js";
 
 // Melbourne CBD
 const INITIAL_VIEW = {
@@ -109,7 +109,7 @@ export function initMap(
     const trails = getTrails();
     if (vehicles.length === 0) return;
 
-    snapshotPositions(vehicles);
+    updateAnchors(vehicles);
     currentVehicles = vehicles;
     currentTrails = trails;
 
