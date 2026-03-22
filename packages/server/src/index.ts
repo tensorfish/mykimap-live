@@ -170,8 +170,10 @@ function broadcastCycle(): void {
   const deltaMs = now - lastBroadcastTime;
   lastBroadcastTime = now;
 
-  // Interpolate positions forward
-  const interpolated = interpolate(currentVehicles, deltaMs);
+  // Interpolate positions forward, sort by entityId for stable array order
+  // (deck.gl transitions match by index — unstable order causes splatter)
+  const interpolated = interpolate(currentVehicles, deltaMs)
+    .sort((a, b) => (a.entityId < b.entityId ? -1 : a.entityId > b.entityId ? 1 : 0));
 
   const state: WorldState = {
     timestamp: Math.floor(now / 1000),

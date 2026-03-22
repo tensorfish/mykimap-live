@@ -52,9 +52,6 @@ export function createVehicleLayer(vehicles: VehiclePosition[]) {
     getSize: (d) => MODE_SIZE[d.mode],
     // Icon drawn pointing up (north). deck.gl getAngle rotates CCW.
     // Bearing is CW from north. So getAngle = -bearing.
-    // Bearing 0° (north) → angle 0° (no rotation, stays up) ✓
-    // Bearing 90° (east) → angle -90° (90° CW, points right) ✓
-    // Bearing 180° (south) → angle -180° (points down) ✓
     getAngle: (d) => -d.bearing,
     sizeScale: 1,
     sizeUnits: "pixels" as const,
@@ -62,10 +59,13 @@ export function createVehicleLayer(vehicles: VehiclePosition[]) {
     sizeMaxPixels: 40,
     pickable: true,
     billboard: false,
-    updateTriggers: {
-      getPosition: [vehicles],
-      getAngle: [vehicles],
-      getColor: [vehicles.length],
+
+    // Smooth animation between 1s server ticks.
+    // Server sorts vehicles by entityId so array order is stable —
+    // deck.gl index-based matching works correctly.
+    transitions: {
+      getPosition: { duration: 1000, easing: (t: number) => t },
+      getAngle: { duration: 1000, easing: (t: number) => t },
     },
   });
 }
