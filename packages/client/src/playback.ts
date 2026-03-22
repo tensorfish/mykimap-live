@@ -127,6 +127,7 @@ async function queryAtTimestamp(ts: number): Promise<VehiclePosition[]> {
       timestamp: row.timestamp,
       stale: Boolean(row.stale),
       shapeDistTraveled: row.shape_dist,
+      prevShapeDistTraveled: row.shape_dist,
       shapeId: "",
       pathSegment: [],
     }));

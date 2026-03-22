@@ -47,6 +47,8 @@ export interface VehiclePosition {
   stale: boolean;
   /** Distance traveled along the GTFS shape polyline (meters). -1 if no shape matched. */
   shapeDistTraveled: number;
+  /** Previous shapeDist from the prior poll — lets clients compute speed + direction immediately */
+  prevShapeDistTraveled: number;
   /** The shape_id this vehicle is snapped to. Empty if unmatched. */
   shapeId: string;
   /**

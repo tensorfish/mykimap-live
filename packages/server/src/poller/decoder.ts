@@ -69,6 +69,7 @@ export function decodeVehiclePositions(
       timestamp: vehicleTimestamp,
       stale: false, // Calculated later based on age
       shapeDistTraveled: -1, // Set during processSnapshot if shape is matched
+      prevShapeDistTraveled: -1, // Set during processSnapshot
       shapeId: "", // Set during processSnapshot
       pathSegment: [], // Set during interpolate
     });

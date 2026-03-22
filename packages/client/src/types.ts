@@ -29,6 +29,7 @@ export interface VehiclePosition {
   timestamp: number;
   stale: boolean;
   shapeDistTraveled: number;
+  prevShapeDistTraveled: number;
   shapeId: string;
   /** Route geometry between prev and current tick position: [lon, lat][] */
   pathSegment: Array<[number, number]>;

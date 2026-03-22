@@ -138,8 +138,14 @@ export function processSnapshot(
       if (snapped) { v.latitude = snapped.lat; v.longitude = snapped.lon; }
       v.shapeDistTraveled = snapDist;
       v.shapeId = v.tripId || v.routeId;
+
+      // Set prevShapeDistTraveled from the last snapshot in the buffer
+      const lastSnap = snapshotBuffer.length > 0 ? snapshotBuffer[snapshotBuffer.length - 1] : null;
+      const prevVehicle = lastSnap?.vehicles.get(v.entityId);
+      v.prevShapeDistTraveled = prevVehicle?.shapeDistTraveled ?? snapDist;
     } else {
       v.shapeDistTraveled = -1;
+      v.prevShapeDistTraveled = -1;
       v.shapeId = "";
     }
 

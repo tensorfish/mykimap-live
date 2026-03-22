@@ -137,14 +137,37 @@ const TRAIL_DIST_M = 500;
 // ── Process incoming ticks ──
 
 export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {
-  // Process all ticks — each one updates targetDist.
-  // The last tick's targets become the starting animation state.
+  if (backlog.length === 0) return;
+
+  // Process all ticks to build animation states
   for (const tick of backlog) {
     feedTick(tick.vehicles, true);
   }
-  // Snap currentDist to targetDist for all vehicles (no animation for backlog)
-  for (const [, anim] of anims) {
-    anim.currentDist = anim.targetDist;
+
+  // Set currentDist to 3 ticks ago so arrows start moving immediately.
+  // The arrow animates from the 3rd-last position toward the latest,
+  // giving instant visual movement on page load.
+  const ticksBack = Math.min(3, backlog.length);
+  const oldTick = backlog[backlog.length - ticksBack];
+  if (!oldTick) return;
+
+  const oldVehicles = new Map<string, VehiclePosition>();
+  for (const v of oldTick.vehicles) {
+    oldVehicles.set(v.entityId, v);
+  }
+
+  for (const [entityId, anim] of anims) {
+    const oldV = oldVehicles.get(entityId);
+    if (oldV && oldV.shapeDistTraveled >= 0) {
+      anim.currentDist = oldV.shapeDistTraveled;
+      // Speed: distance between old and current target / estimated time
+      const dist = Math.abs(anim.targetDist - anim.currentDist);
+      // Each tick is ~1s broadcast interval, so ticksBack ticks ≈ ticksBack seconds
+      if (dist > 0) {
+        anim.speed = dist / ticksBack;
+        anim.direction = anim.targetDist >= anim.currentDist ? 1 : -1;
+      }
+    }
   }
 }
 
@@ -177,12 +200,16 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
         existing.lastUpdateAt = now;
       }
     } else if (!existing && v.shapeDistTraveled >= 0) {
-      // New vehicle
+      // New vehicle — use prevShapeDistTraveled to start behind and animate forward
+      const prevDist = v.prevShapeDistTraveled >= 0 ? v.prevShapeDistTraveled : v.shapeDistTraveled;
+      const dist = Math.abs(v.shapeDistTraveled - prevDist);
+      const inferredSpeed = v.speed > 0 ? v.speed : (dist > 0 ? dist / 30 : 0); // ~30s between polls
+
       anims.set(v.entityId, {
-        currentDist: v.shapeDistTraveled,
-        targetDist: v.shapeDistTraveled,
-        speed: v.speed > 0 ? v.speed : 0,
-        direction: 1,
+        currentDist: prevDist, // start at the previous position
+        targetDist: v.shapeDistTraveled, // animate toward current
+        speed: inferredSpeed,
+        direction: v.shapeDistTraveled >= prevDist ? 1 : -1,
         shapeKey,
         lastUpdateAt: now,
       });
