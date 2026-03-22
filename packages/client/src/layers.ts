@@ -261,3 +261,30 @@ export function createTrailLayer(
     pickable: false,
   });
 }
+
+// ── Full route shape layer (shown when a vehicle is selected) ──
+
+export function createRouteShapeLayer(
+  routeShape: Array<[number, number]> | null,
+  mode: TransportMode | null
+) {
+  if (!routeShape || routeShape.length < 2 || !mode) {
+    return new PathLayer({ id: "route-shape", data: [] });
+  }
+
+  const [r, g, b] = MODE_COLORS[mode];
+
+  return new PathLayer({
+    id: "route-shape",
+    data: [{ path: routeShape }],
+    getPath: (d: any) => d.path,
+    getColor: [r, g, b, 60],
+    getWidth: 4,
+    widthUnits: "pixels" as const,
+    widthMinPixels: 2,
+    widthMaxPixels: 8,
+    capRounded: true,
+    jointRounded: true,
+    pickable: false,
+  });
+}

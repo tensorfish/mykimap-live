@@ -4,7 +4,7 @@ import { loadProtoSchema } from "./poller/decoder.js";
 import { poll } from "./poller/index.js";
 import { processSnapshot, interpolate, getTrails } from "./interpolation/index.js";
 import { addClient, removeClient, broadcast, clientCount } from "./broadcast/index.js";
-import { loadShapes, shapeStats } from "./shapes/index.js";
+import { loadShapes, shapeStats, getShapeForTrip, getShapeForRoute } from "./shapes/index.js";
 import { log } from "./logger.js";
 import type { VehiclePosition, ServiceAlert, WorldState } from "./types.js";
 
@@ -214,6 +214,23 @@ function startServer(): void {
           clients: clientCount(),
           lastPoll: lastPollTimestamp,
         });
+      }
+
+      // Route shape endpoint — returns full polyline for a vehicle's route
+      if (url.pathname.startsWith("/api/route-shape/")) {
+        const tripId = decodeURIComponent(url.pathname.slice("/api/route-shape/".length));
+        const routeId = url.searchParams.get("routeId") ?? "";
+
+        // Try trip_id first, fall back to route_id
+        const shape = getShapeForTrip(tripId) ?? getShapeForRoute(routeId);
+
+        if (!shape || shape.length === 0) {
+          return Response.json({ path: [] });
+        }
+
+        // Return as [lon, lat][] for direct use by deck.gl
+        const path = shape.map((p) => [p.lon, p.lat] as [number, number]);
+        return Response.json({ path });
       }
 
       // Serve client static files in production

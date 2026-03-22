@@ -1,8 +1,9 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition } from "./types.js";
-import { store, getVehicles, getTrails, getSelectedEntityId, selectVehicle } from "./store.js";
-import { createVehicleLayer, createTrailLayer, updateAnchors } from "./layers.js";
+import { store, getVehicles, getTrails, getSelectedEntityId, getRouteShape, selectVehicle } from "./store.js";
+import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, updateAnchors } from "./layers.js";
+import type { TransportMode } from "./types.js";
 
 // Melbourne CBD
 const INITIAL_VIEW = {
@@ -46,9 +47,14 @@ export function initMap(
     },
   });
 
+  // Cursor: pointer when hovering over a vehicle arrow
+  map.on("mousemove", (e) => {
+    if (!deck) return;
+    const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
+    map.getCanvas().style.cursor = picked?.object?.entityId ? "pointer" : "";
+  });
+
   // Click handler: use Mapbox's click event + deck.pickObject()
-  // This way Mapbox keeps full control of pan/zoom/rotate,
-  // and we intercept clicks only to pick vehicle objects.
   map.on("click", (e) => {
     if (!deck) return;
     const picked = deck.pickObject({
@@ -94,8 +100,18 @@ export function initMap(
   function renderFrame() {
     if (!deck) return;
     const selectedId = getSelectedEntityId();
+    const routeShape = getRouteShape();
+
+    // Find the selected vehicle's mode for route shape coloring
+    let selectedMode: TransportMode | null = null;
+    if (selectedId) {
+      const v = currentVehicles.find((v) => v.entityId === selectedId);
+      if (v) selectedMode = v.mode;
+    }
+
     deck.setProps({
       layers: [
+        createRouteShapeLayer(routeShape, selectedMode),
         createTrailLayer(currentVehicles, currentTrails, selectedId),
         createVehicleLayer(currentVehicles, selectedId),
       ],
