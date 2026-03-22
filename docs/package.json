@@ -1,0 +1,17 @@
+{
+  "name": "docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vitepress dev",
+    "build": "vitepress build",
+    "preview": "vitepress preview",
+    "typecheck": "echo 'no typecheck for docs'"
+  },
+  "devDependencies": {
+    "dayjs": "^1.11.20",
+    "mermaid": "^11.13.0",
+    "vitepress": "^1.6.0",
+    "vitepress-plugin-mermaid": "^2.0.17"
+  }
+}

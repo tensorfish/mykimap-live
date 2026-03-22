@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Melbourne Transport Map</title>
+    <link
+      href="https://api.mapbox.com/mapbox-gl-js/v3.9.2/mapbox-gl.css"
+      rel="stylesheet"
+    />
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; }
+      #map { width: 100%; height: 100%; }
+      #status {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        z-index: 1;
+        background: rgba(0, 0, 0, 0.75);
+        color: #fff;
+        padding: 8px 14px;
+        border-radius: 6px;
+        font: 13px/1.4 system-ui, sans-serif;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        pointer-events: auto;
+      }
+      #status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      #reconnect-btn {
+        display: none;
+        background: #5cb85c;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 10px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="status">
+      <span id="status-dot"></span>
+      <span id="status-label">Loading…</span>
+      <span id="status-info" style="color: #aaa"></span>
+      <button id="reconnect-btn">Reconnect</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

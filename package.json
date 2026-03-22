@@ -1,0 +1,16 @@
+{
+  "name": "trams-melbourne",
+  "private": true,
+  "workspaces": ["packages/*", "docs"],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "dev:server": "bun run --filter server dev",
+    "dev:client": "bun run --filter client dev",
+    "dev:docs": "bun run --filter docs dev",
+    "build": "bun run --filter '*' build",
+    "build:server": "bun run --filter server build",
+    "build:client": "bun run --filter client build",
+    "build:docs": "bun run --filter docs build",
+    "typecheck": "bun run --filter '*' typecheck"
+  }
+}

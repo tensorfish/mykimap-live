@@ -1,0 +1,113 @@
+# Melbourne Transport Map
+
+A real-time map of every tram, train, and bus in Victoria, Australia.
+
+Open it in a browser and watch ~2,000 vehicles move across the city — trams gliding down their routes, trains running between stations, buses fanning out across the suburbs. Open it in two windows and they're perfectly in sync.
+
+## How it works
+
+A server polls 10 live feeds from Transport Victoria every 7 seconds, decodes the protobuf data, snaps each vehicle onto its actual route geometry (so it follows the road, not a straight line through buildings), and broadcasts smooth interpolated positions to every connected browser over WebSocket.
+
+The browser renders it all on a dark Mapbox base map using deck.gl for GPU-accelerated animation of thousands of moving dots.
+
+## Quickstart
+
+### Prerequisites
+
+- [Bun](https://bun.sh) (v1.0+)
+- A [Transport Victoria Open Data](https://opendata.transport.vic.gov.au) API key (free — register and check your profile)
+- A [Mapbox](https://account.mapbox.com/access-tokens/) access token (free tier works)
+
+### Install
+
+```bash
+git clone https://github.com/tensorfish/trams-melbourne.git
+cd trams-melbourne
+bun install
+```
+
+### Configure
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and fill in:
+
+```env
+OPENDATA_VIC_API_KEY=your-transport-vic-key
+VITE_MAPBOX_ACCESS_TOKEN=your-mapbox-token
+```
+
+### Run
+
+```bash
+# Start the server (port 3000)
+bun run dev:server
+
+# In another terminal — start the client (port 5173)
+bun run dev:client
+```
+
+Open http://localhost:5173
+
+On first run the server downloads the GTFS Schedule (~191 MB) to build the route shape index. This is cached in `.cache/gtfs/` and only happens once.
+
+### Build
+
+```bash
+bun run build
+```
+
+### Docs
+
+```bash
+bun run dev:docs
+```
+
+Opens the VitePress documentation site at http://localhost:5173 with architecture diagrams, data flow, and setup guide.
+
+## Project structure
+
+```
+packages/
+  server/             Bun backend
+    src/
+      index.ts          Boot, poll loop, broadcast loop, HTTP + WebSocket
+      config.ts         Environment, feed URLs, timing constants
+      types.ts          Shared type definitions
+      state-machine.ts  Server state machine with transition logging
+      logger.ts         Structured logging
+      poller/           GTFS-RT feed fetching and protobuf decoding
+      interpolation/    Speed/bearing calculation, shape-following interpolation
+      shapes/           GTFS Schedule loader, route shape index, polyline snapping
+      broadcast/        WebSocket client management
+    proto/
+      gtfs-realtime.proto
+  client/             Vite frontend (no framework)
+    src/
+      main.ts           Bootstrap
+      store.ts          TanStack Store — reactive app state
+      state-machine.ts  Client state machine
+      ws.ts             WebSocket with auto-reconnect
+      map.ts            Mapbox GL JS + deck.gl initialization
+      layers.ts         Vehicle ScatterplotLayer
+      ui.ts             Status bar (vanilla DOM)
+docs/                 VitePress documentation site
+.memory/              Design documents and data analysis
+```
+
+## What's in the feeds
+
+| Mode | Vehicles | Bearing? | Speed? |
+|---|---|---|---|
+| Metro Train | ~90 | ✓ | ✗ |
+| Tram | ~160 | ✗ | ✗ |
+| Bus | ~1,700 | ✓ | ✗ |
+| V/Line | ~30 | ✓ | ✗ |
+
+No feed provides speed. Trams provide no bearing. Both are calculated by the server from consecutive position snapshots and route shape geometry.
+
+## License
+
+Data: [Creative Commons Attribution 4.0](https://creativecommons.org/licenses/by/4.0/) — Department of Transport and Planning, Victoria.
