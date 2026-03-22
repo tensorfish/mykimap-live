@@ -120,6 +120,18 @@ export interface WorldState {
   alerts: ServiceAlert[];
   /** Server state for client awareness */
   serverState: ServerState;
+  /** Sequence number — monotonically increasing per broadcast tick */
+  seq: number;
+}
+
+/** Sent on WS connect: recent tick backlog so client can build a continuous path queue */
+export interface InitialState {
+  /** Recent ticks in order (oldest first). Client concatenates path segments. */
+  backlog: WorldState[];
+  /** Current alerts + trails (sent once, not per-tick) */
+  alerts: ServiceAlert[];
+  trails: Record<string, Array<[number, number]>>;
+  serverState: ServerState;
 }
 
 // ── Server state machine ──

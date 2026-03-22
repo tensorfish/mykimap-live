@@ -24,116 +24,144 @@ function getArrowIconUrl(): string {
   return arrowIconUrl;
 }
 
-// ── Client-side lerp engine ──
+// ── Continuous path queue per vehicle ──
 //
-// Server sends shape-interpolated positions every 1s.
-// We lerp from the LAST DISPLAYED position (what the user sees)
-// to the new server position over 1s at 60fps.
-// Keyed by entityId — immune to array reordering.
+// Each vehicle has a queue of [lon, lat] waypoints built from
+// pathSegments received from the server. The playhead walks along
+// this queue at constant speed. As new ticks arrive, their path
+// segments are appended to the end. The animation never breaks.
 
-interface LerpState {
-  /** Where the arrow was last rendered */
-  displayLon: number;
-  displayLat: number;
-  displayBearing: number;
-  /** Path segment from server: route geometry between prev and current tick */
-  path: Array<[number, number]>;
-  /** Cumulative distances along the path for even-speed traversal */
-  pathDists: number[];
-  pathTotalDist: number;
-  /** Target position + bearing (end of path) */
-  targetLon: number;
-  targetLat: number;
-  targetBearing: number;
-  /** When this tick was received */
-  updatedAt: number;
+interface VehicleQueue {
+  /** All waypoints concatenated, in order */
+  points: Array<[number, number]>;
+  /** Cumulative distance at each point */
+  dists: number[];
+  /** Total distance of the queue */
+  totalDist: number;
+  /** Current playhead distance (advanced each frame) */
+  playhead: number;
+  /** Speed in degrees-per-ms (computed from last segment) */
+  speed: number;
+  /** When the last segment was appended (for speed pacing) */
+  lastAppendAt: number;
+  /** Target bearing from latest server tick */
+  bearing: number;
+  /** Previous bearing for smooth rotation */
+  prevBearing: number;
 }
 
-const lerpStates = new Map<string, LerpState>();
-const LERP_MS = 1000;
+const queues = new Map<string, VehicleQueue>();
 
-/** Compute cumulative distances for a path */
-function computePathDists(path: Array<[number, number]>): { dists: number[]; total: number } {
-  const dists = [0];
-  let total = 0;
-  for (let i = 1; i < path.length; i++) {
-    const dlat = path[i]![1] - path[i - 1]![1];
-    const dlon = path[i]![0] - path[i - 1]![0];
-    // Approximate distance in degrees → good enough for lerp pacing
-    total += Math.sqrt(dlat * dlat + dlon * dlon);
-    dists.push(total);
+function degDist(a: [number, number], b: [number, number]): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function appendToQueue(q: VehicleQueue, segment: Array<[number, number]>): void {
+  for (const pt of segment) {
+    const last = q.points[q.points.length - 1];
+    if (last) {
+      const d = degDist(last, pt);
+      if (d < 1e-9) continue; // skip duplicate points
+      q.totalDist += d;
+    }
+    q.points.push(pt);
+    q.dists.push(q.totalDist);
   }
-  return { dists, total };
 }
 
-/** Sample a position along a path at a given fraction (0–1) */
-function samplePath(path: Array<[number, number]>, dists: number[], totalDist: number, t: number): [number, number] {
-  if (path.length === 0) return [0, 0];
-  if (path.length === 1 || totalDist === 0) return path[0]!;
+function trimQueue(q: VehicleQueue): void {
+  // Remove consumed points (keep a few behind the playhead for safety)
+  let trimTo = 0;
+  for (let i = 0; i < q.dists.length - 1; i++) {
+    if (q.dists[i]! < q.playhead - 0.001) trimTo = i;
+    else break;
+  }
+  if (trimTo > 0) {
+    q.points.splice(0, trimTo);
+    q.dists.splice(0, trimTo);
+  }
+}
 
-  const targetDist = t * totalDist;
+function sampleQueue(q: VehicleQueue): [number, number] {
+  if (q.points.length === 0) return [0, 0];
+  if (q.points.length === 1) return q.points[0]!;
 
-  // Find segment
-  for (let i = 0; i < path.length - 1; i++) {
-    if (targetDist >= dists[i]! && targetDist <= dists[i + 1]!) {
-      const segLen = dists[i + 1]! - dists[i]!;
-      const segT = segLen > 0 ? (targetDist - dists[i]!) / segLen : 0;
+  // Clamp playhead
+  const d = Math.max(q.dists[0]!, Math.min(q.playhead, q.totalDist));
+
+  for (let i = 0; i < q.points.length - 1; i++) {
+    if (d >= q.dists[i]! && d <= q.dists[i + 1]!) {
+      const segLen = q.dists[i + 1]! - q.dists[i]!;
+      const t = segLen > 0 ? (d - q.dists[i]!) / segLen : 0;
       return [
-        path[i]![0] + segT * (path[i + 1]![0] - path[i]![0]),
-        path[i]![1] + segT * (path[i + 1]![1] - path[i]![1]),
+        q.points[i]![0] + t * (q.points[i + 1]![0] - q.points[i]![0]),
+        q.points[i]![1] + t * (q.points[i + 1]![1] - q.points[i]![1]),
       ];
     }
   }
 
-  return path[path.length - 1]!;
+  return q.points[q.points.length - 1]!;
 }
 
-/** Called when new server tick arrives */
-export function updateLerpTargets(vehicles: VehiclePosition[]): void {
+/** Feed a backlog of ticks into the queues (on initial connect) */
+export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {
+  for (const tick of backlog) {
+    feedTick(tick.vehicles);
+  }
+}
+
+/** Feed a single server tick — append path segments to queues */
+export function feedTick(vehicles: VehiclePosition[]): void {
   const now = Date.now();
   const seen = new Set<string>();
 
   for (const v of vehicles) {
     seen.add(v.entityId);
-    const s = lerpStates.get(v.entityId);
+    let q = queues.get(v.entityId);
 
-    // Build path: if server sent a path segment, use it.
-    // Otherwise fall back to a 2-point straight line.
-    let path = v.pathSegment && v.pathSegment.length >= 2
-      ? v.pathSegment
-      : undefined;
-
-    if (s) {
-      if (!path) {
-        // No path segment — straight line from display to target
-        path = [[s.displayLon, s.displayLat], [v.longitude, v.latitude]];
-      }
-      const { dists, total } = computePathDists(path);
-      s.path = path;
-      s.pathDists = dists;
-      s.pathTotalDist = total;
-      s.targetLon = v.longitude;
-      s.targetLat = v.latitude;
-      s.targetBearing = v.bearing;
-      s.updatedAt = now;
-    } else {
-      // First time — snap
-      const p: Array<[number, number]> = [[v.longitude, v.latitude]];
-      lerpStates.set(v.entityId, {
-        displayLon: v.longitude, displayLat: v.latitude, displayBearing: v.bearing,
-        path: p, pathDists: [0], pathTotalDist: 0,
-        targetLon: v.longitude, targetLat: v.latitude, targetBearing: v.bearing,
-        updatedAt: now,
-      });
+    if (!q) {
+      // New vehicle — create queue starting at current position
+      q = {
+        points: [[v.longitude, v.latitude]],
+        dists: [0],
+        totalDist: 0,
+        playhead: 0,
+        speed: 0,
+        lastAppendAt: now,
+        bearing: v.bearing,
+        prevBearing: v.bearing,
+      };
+      queues.set(v.entityId, q);
     }
+
+    // Append path segment from server
+    const seg = v.pathSegment && v.pathSegment.length >= 2 ? v.pathSegment : null;
+
+    if (seg) {
+      const prevTotal = q.totalDist;
+      appendToQueue(q, seg);
+      const addedDist = q.totalDist - prevTotal;
+      const dt = now - q.lastAppendAt;
+      if (dt > 0 && addedDist > 0) {
+        q.speed = addedDist / dt; // degrees per ms
+      }
+      q.lastAppendAt = now;
+    }
+
+    q.prevBearing = q.bearing;
+    q.bearing = v.bearing;
   }
 
-  for (const id of lerpStates.keys()) {
-    if (!seen.has(id)) lerpStates.delete(id);
+  // Remove departed
+  for (const id of queues.keys()) {
+    if (!seen.has(id)) queues.delete(id);
   }
 }
 
-/** Pre-computed per-frame display data */
+// ── Compute display positions for this frame ──
+
 export interface DisplayVehicle {
   entityId: string;
   mode: TransportMode;
@@ -147,15 +175,11 @@ export interface DisplayVehicle {
   vehicleLabel: string;
 }
 
-/** Compute positions for this exact frame by walking along path segments. */
-export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
-  const now = Date.now();
-
+export function computeFrame(vehicles: VehiclePosition[], dtMs: number): DisplayVehicle[] {
   return vehicles.map((v) => {
-    const s = lerpStates.get(v.entityId);
+    const q = queues.get(v.entityId);
 
-    if (!s || v.stale || v.speed < 0.5) {
-      if (s) { s.displayLon = v.longitude; s.displayLat = v.latitude; s.displayBearing = v.bearing; }
+    if (!q || v.stale || q.speed <= 0) {
       return {
         entityId: v.entityId, mode: v.mode,
         position: [v.longitude, v.latitude] as [number, number],
@@ -165,38 +189,21 @@ export function computeFrame(vehicles: VehiclePosition[]): DisplayVehicle[] {
       };
     }
 
-    const elapsed = now - s.updatedAt;
-    const t = Math.min(elapsed / LERP_MS, 1);
-
-    // Walk along the path segment (actual route geometry)
-    let lon: number, lat: number;
-    if (s.path.length >= 2 && s.pathTotalDist > 0) {
-      [lon, lat] = samplePath(s.path, s.pathDists, s.pathTotalDist, t);
-    } else {
-      // No path — hold position
-      lon = s.displayLon;
-      lat = s.displayLat;
+    // Advance playhead along the queue at the vehicle's speed
+    // Only advance if there's path ahead (don't overshoot)
+    const ahead = q.totalDist - q.playhead;
+    if (ahead > 0) {
+      q.playhead += q.speed * dtMs;
+      q.playhead = Math.min(q.playhead, q.totalDist);
     }
 
-    // Lerp bearing with wraparound
-    let fromB = -s.displayBearing;
-    let toB = -s.targetBearing;
-    let diff = toB - fromB;
-    if (diff > 180) diff -= 360;
-    if (diff < -180) diff += 360;
-    const angle = fromB + t * diff;
-
-    // At t=1, snap display to target for the next tick's path start
-    if (t >= 1) {
-      s.displayLon = s.targetLon;
-      s.displayLat = s.targetLat;
-      s.displayBearing = s.targetBearing;
-    }
+    const pos = sampleQueue(q);
+    trimQueue(q);
 
     return {
       entityId: v.entityId, mode: v.mode,
-      position: [lon, lat] as [number, number],
-      angle, stale: v.stale, speed: v.speed,
+      position: pos,
+      angle: -v.bearing, stale: v.stale, speed: v.speed,
       bearing: v.bearing, routeId: v.routeId,
       vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
     };

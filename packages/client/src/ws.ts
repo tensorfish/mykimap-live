@@ -1,4 +1,4 @@
-import { store, transition, applyTick } from "./store.js";
+import { transition, applyTick, applyBacklog } from "./store.js";
 import type { WorldState } from "./types.js";
 
 const STALE_THRESHOLD_MS = 5_000;
@@ -10,10 +10,7 @@ let retries = 0;
 let staleTimer: ReturnType<typeof setTimeout> | null = null;
 
 function clearStaleTimer(): void {
-  if (staleTimer) {
-    clearTimeout(staleTimer);
-    staleTimer = null;
-  }
+  if (staleTimer) { clearTimeout(staleTimer); staleTimer = null; }
 }
 
 function resetStaleTimer(): void {
@@ -28,7 +25,6 @@ function scheduleReconnect(): void {
     transition("DISCONNECTED", "Max retries exhausted");
     return;
   }
-
   transition("RECONNECTING", "WebSocket closed");
   const delay = RECONNECT_BASE_MS * Math.pow(2, retries);
   retries++;
@@ -55,8 +51,16 @@ export function connect(): void {
 
   ws.onmessage = (event) => {
     try {
-      const data: WorldState = JSON.parse(event.data as string);
-      applyTick(data);
+      const msg = JSON.parse(event.data as string);
+
+      if (msg.type === "init") {
+        // Initial backlog: array of recent ticks to build the path queue
+        applyBacklog(msg.backlog as WorldState[], msg.alerts, msg.trails);
+      } else if (msg.type === "tick") {
+        // Regular tick: append to path queue
+        applyTick(msg as WorldState);
+      }
+
       resetStaleTimer();
     } catch {
       console.error("[ws] Failed to parse message");
@@ -69,17 +73,11 @@ export function connect(): void {
     scheduleReconnect();
   };
 
-  ws.onerror = () => {
-    // onclose fires after onerror — reconnection handled there
-  };
+  ws.onerror = () => {};
 }
 
-/** Manual reconnect from the UI */
 export function reconnect(): void {
   retries = 0;
-  if (ws) {
-    ws.close();
-    ws = null;
-  }
+  if (ws) { ws.close(); ws = null; }
   connect();
 }

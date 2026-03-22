@@ -27,7 +27,7 @@ export function clientCount(): number {
 export function broadcast(state: WorldState): void {
   if (clients.size === 0) return;
 
-  const payload = JSON.stringify(state);
+  const payload = JSON.stringify({ type: "tick", ...state });
 
   for (const ws of clients) {
     try {

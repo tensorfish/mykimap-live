@@ -56,6 +56,7 @@ export interface WorldState {
   trails: Record<string, Array<[number, number]>>;
   alerts: ServiceAlert[];
   serverState: ServerState;
+  seq: number;
 }
 
 // ── Client state machine ──

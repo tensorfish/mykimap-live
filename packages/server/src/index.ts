@@ -6,7 +6,7 @@ import { processSnapshot, interpolate, getTrails } from "./interpolation/index.j
 import { addClient, removeClient, broadcast, clientCount } from "./broadcast/index.js";
 import { loadShapes, shapeStats, getShapeForTrip, getShapeForRoute } from "./shapes/index.js";
 import { log } from "./logger.js";
-import type { VehiclePosition, ServiceAlert, WorldState } from "./types.js";
+import type { VehiclePosition, ServiceAlert, WorldState, InitialState } from "./types.js";
 
 // ── State ──
 
@@ -17,6 +17,12 @@ let lastPollTimestamp = 0;
 let lastHeaderTimestamp = 0;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let broadcastTimer: ReturnType<typeof setInterval> | null = null;
+let broadcastSeq = 0;
+
+/** Recent broadcast ticks — sent as backlog to new clients so they
+ *  can build a continuous path queue before animation starts. */
+const BACKLOG_SIZE = 10; // ~10 seconds of ticks at 1s interval
+const tickBacklog: WorldState[] = [];
 
 // ── Boot sequence ──
 
@@ -164,25 +170,32 @@ let lastBroadcastTime = Date.now();
 
 function broadcastCycle(): void {
   if (!sm.isBroadcasting) return;
-  if (clientCount() === 0) return;
 
   const now = Date.now();
   lastBroadcastTime = now;
 
-  // Interpolate: advance each vehicle along its route shape.
-  // Trail + bearing both derived from shape geometry.
   const interpolated = interpolate(currentVehicles)
     .sort((a, b) => (a.entityId < b.entityId ? -1 : a.entityId > b.entityId ? 1 : 0));
 
+  broadcastSeq++;
   const state: WorldState = {
     timestamp: Math.floor(now / 1000),
     vehicles: interpolated,
     trails: getTrails(),
     alerts: currentAlerts,
     serverState: sm.state,
+    seq: broadcastSeq,
   };
 
-  broadcast(state);
+  // Store in backlog for new client bootstrap
+  tickBacklog.push(state);
+  if (tickBacklog.length > BACKLOG_SIZE) {
+    tickBacklog.shift();
+  }
+
+  if (clientCount() > 0) {
+    broadcast(state);
+  }
 }
 
 // ── HTTP + WebSocket server ──
@@ -247,16 +260,16 @@ function startServer(): void {
       open(ws) {
         addClient(ws);
 
-        // Send initial state immediately
-        if (sm.isBroadcasting) {
-          const state: WorldState = {
-            timestamp: Math.floor(Date.now() / 1000),
-            vehicles: currentVehicles,
-            trails: getTrails(),
+        // Send backlog of recent ticks so the client can build a
+        // continuous path queue before animation starts.
+        if (sm.isBroadcasting && tickBacklog.length > 0) {
+          const init: InitialState = {
+            backlog: tickBacklog,
             alerts: currentAlerts,
+            trails: getTrails(),
             serverState: sm.state,
           };
-          ws.send(JSON.stringify(state));
+          ws.send(JSON.stringify({ type: "init", ...init }));
         }
       },
       message(_ws, _message) {

@@ -2,7 +2,7 @@ import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition, TransportMode } from "./types.js";
 import { store, getVehicles, getTrails, getSelectedEntityId, getRouteShape, selectVehicle } from "./store.js";
-import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, updateLerpTargets, computeFrame } from "./layers.js";
+import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
 
 const INITIAL_VIEW = {
   longitude: 144.963,
@@ -44,14 +44,12 @@ export function initMap(
     },
   });
 
-  // Cursor: pointer on hover
   map.on("mousemove", (e) => {
     if (!deck) return;
     const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
     map.getCanvas().style.cursor = picked?.object?.entityId ? "pointer" : "";
   });
 
-  // Click: select/deselect
   map.on("click", (e) => {
     if (!deck) return;
     const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
@@ -63,45 +61,55 @@ export function initMap(
     }
   });
 
-  // Sync deck.gl viewState on Mapbox move
   map.on("move", () => {
     if (!deck) return;
     const c = map.getCenter();
     deck.setProps({
       viewState: {
-        longitude: c.lng,
-        latitude: c.lat,
-        zoom: map.getZoom(),
-        pitch: map.getPitch(),
-        bearing: map.getBearing(),
+        longitude: c.lng, latitude: c.lat,
+        zoom: map.getZoom(), pitch: map.getPitch(), bearing: map.getBearing(),
       },
     });
   });
 
-  // ── Data + render ──
+  // ── Data flow ──
 
   let currentVehicles: VehiclePosition[] = [];
   let currentTrails: Record<string, Array<[number, number]>> = {};
 
-  // When new server tick arrives, update lerp targets
+  // Handle initial backlog from server
+  window.addEventListener("vehicle-backlog", ((e: CustomEvent) => {
+    const { backlog } = e.detail;
+    feedBacklog(backlog);
+  }) as EventListener);
+
+  // Handle regular ticks
   store.subscribe(() => {
     const vehicles = getVehicles();
     const trails = getTrails();
     if (vehicles.length === 0) return;
 
-    updateLerpTargets(vehicles);
+    feedTick(vehicles);
     currentVehicles = vehicles;
     currentTrails = trails;
   });
 
-  // 60fps render loop — lerps between server ticks by entityId
-  function renderFrame() {
+  // ── 60fps render loop ──
+  // Walks each vehicle along its path queue at constant speed.
+  // The queue is fed by server ticks — animation is continuous
+  // because the queue always has segments ahead.
+
+  let lastFrameTime = performance.now();
+
+  function renderFrame(now: number) {
+    const dtMs = now - lastFrameTime;
+    lastFrameTime = now;
+
     if (deck && currentVehicles.length > 0) {
       const selectedId = getSelectedEntityId();
       const routeShape = getRouteShape();
 
-      // Compute lerped positions for THIS frame
-      const display = computeFrame(currentVehicles);
+      const display = computeFrame(currentVehicles, dtMs);
 
       let selectedMode: TransportMode | null = null;
       if (selectedId) {
@@ -122,6 +130,5 @@ export function initMap(
   }
 
   requestAnimationFrame(renderFrame);
-
   map.on("load", () => onReady());
 }
