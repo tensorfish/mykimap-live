@@ -1,65 +1,42 @@
-import type { VehiclePosition } from "../types.js";
+import type { VehiclePosition, TransportMode } from "../types.js";
 import { config } from "../config.js";
-import {
-  haversineDistance,
-  calculateBearing,
-} from "./geo.js";
+import { haversineDistance, calculateBearing } from "./geo.js";
 import {
   getShapeForTrip,
   getShapeForRoute,
   snapToShape,
   sampleShape,
+  shapeLength,
 } from "../shapes/index.js";
 
-// ── Per-vehicle tracking state ──
+// ── Per-vehicle state ──
 
 interface VehicleState {
-  /** Position from the most recent poll (the "target") */
-  targetLat: number;
-  targetLon: number;
-  targetShapeDist: number;
-  targetTimestamp: number;
+  /** Shape-snapped position from the last poll */
+  lat: number;
+  lon: number;
+  shapeDist: number;
+  timestamp: number;
 
-  /** Position from the poll before that (the "origin") */
-  originLat: number;
-  originLon: number;
-  originShapeDist: number;
-  originTimestamp: number;
+  /** Calculated from consecutive polls */
+  speed: number;      // m/s
+  direction: number;  // +1 or -1 along shape
+  bearing: number;    // degrees, derived from shape + direction
 
-  /** Calculated values */
-  bearing: number;
-  speed: number;
-  shapeId: string;
-
-  /** When the target was received (wall clock ms) */
-  targetReceivedAt: number;
-
-  /** Estimated travel time between origin and target (ms) */
-  travelTimeMs: number;
+  /** Wall clock when this state was set */
+  receivedAt: number;
 }
 
 const vehicleStates = new Map<string, VehicleState>();
 
-// ── Server-side trail history ──
+// ── Trail history ──
 
-/**
- * Trail length per mode (in points, at ~1 point/tick).
- * Buses and trams travel slower so a longer trail covers a similar
- * visual distance on the map as a shorter train trail.
- */
 const TRAIL_LENGTH: Record<TransportMode, number> = {
-  metro: 30,
-  vline: 30,
-  tram: 60,
-  bus: 80,
+  metro: 30, vline: 30, tram: 60, bus: 80,
 };
 
-/** Per-vehicle trail: entityId → array of [lon, lat] (most recent last) */
 const vehicleTrails = new Map<string, Array<[number, number]>>();
 
-/**
- * Append a position to a vehicle's trail. Deduplicates consecutive identical points.
- */
 function appendTrail(entityId: string, lon: number, lat: number, mode: TransportMode): void {
   let trail = vehicleTrails.get(entityId);
   if (!trail) {
@@ -68,36 +45,55 @@ function appendTrail(entityId: string, lon: number, lat: number, mode: Transport
   }
   const last = trail[trail.length - 1];
   if (!last || Math.abs(last[0] - lon) > 1e-7 || Math.abs(last[1] - lat) > 1e-7) {
-    const max = TRAIL_LENGTH[mode];
     trail.push([lon, lat]);
-    if (trail.length > max) {
-      trail.splice(0, trail.length - max);
+    if (trail.length > TRAIL_LENGTH[mode]) {
+      trail.splice(0, trail.length - TRAIL_LENGTH[mode]);
     }
   }
 }
 
-/** Get all trails as a plain object for serialization */
 export function getTrails(): Record<string, Array<[number, number]>> {
   const result: Record<string, Array<[number, number]>> = {};
   for (const [id, trail] of vehicleTrails) {
-    if (trail.length >= 2) {
-      result[id] = trail;
-    }
+    if (trail.length >= 2) result[id] = trail;
   }
   return result;
 }
 
-/**
- * Process a new batch of vehicle positions from a poll.
- *
- * For each vehicle, the current position becomes the new "target"
- * and the previous target becomes the "origin". Between broadcasts,
- * vehicles are interpolated from origin → target along the shape,
- * then projected forward past the target using calculated speed.
- *
- * This means the vehicle smoothly traverses the gap between two
- * known positions along the road/track — no teleporting.
- */
+// ── Shape bearing helper ──
+
+function bearingAtDist(
+  shape: { lat: number; lon: number; dist: number }[],
+  dist: number,
+  direction: number
+): number {
+  if (shape.length < 2) return 0;
+
+  // Find the segment containing this distance
+  let a = shape[0]!, b = shape[1]!;
+  for (let i = 0; i < shape.length - 1; i++) {
+    if (dist >= shape[i]!.dist && dist <= shape[i + 1]!.dist) {
+      a = shape[i]!;
+      b = shape[i + 1]!;
+      break;
+    }
+    // Past the end — use last segment
+    a = shape[shape.length - 2]!;
+    b = shape[shape.length - 1]!;
+  }
+
+  let bearing = calculateBearing(a.lat, a.lon, b.lat, b.lon);
+
+  // If traveling backwards along the shape, flip bearing 180°
+  if (direction < 0) {
+    bearing = (bearing + 180) % 360;
+  }
+
+  return bearing;
+}
+
+// ── Process a fresh poll ──
+
 export function processSnapshot(
   vehicles: VehiclePosition[],
   headerTimestamp: number
@@ -108,11 +104,9 @@ export function processSnapshot(
   for (const v of vehicles) {
     const prev = vehicleStates.get(v.entityId);
     const age = now - v.timestamp;
-
     v.stale = age * 1000 > config.staleVehicleThresholdMs;
 
-    // Try to match vehicle to a shape polyline
-    // Primary: trip_id match. Fallback: route_id match (trams need this).
+    // Match to shape
     const shape = getShapeForTrip(v.tripId) ?? getShapeForRoute(v.routeId);
     let snapDist = -1;
 
@@ -121,7 +115,6 @@ export function processSnapshot(
       v.shapeDistTraveled = snapDist;
       v.shapeId = v.tripId;
 
-      // Snap the reported position onto the shape
       const snapped = sampleShape(shape, snapDist);
       if (snapped) {
         v.latitude = snapped.lat;
@@ -132,114 +125,138 @@ export function processSnapshot(
       v.shapeId = "";
     }
 
-    // Append snapped position to trail (only from real poll data, not interpolation)
-    if (!v.stale) {
-      appendTrail(v.entityId, v.longitude, v.latitude, v.mode);
-    }
-
     if (prev) {
-      const dt = v.timestamp - prev.targetTimestamp;
+      const dt = v.timestamp - prev.timestamp;
 
       if (dt > 0) {
-        // Vehicle timestamp changed — new data from the feed.
-        // Calculate speed from position delta.
+        // New data — calculate speed and direction
         let dist: number;
-        if (snapDist >= 0 && prev.targetShapeDist >= 0) {
-          dist = Math.abs(snapDist - prev.targetShapeDist);
+        let direction = 1;
+
+        if (snapDist >= 0 && prev.shapeDist >= 0) {
+          const shapeDelta = snapDist - prev.shapeDist;
+          dist = Math.abs(shapeDelta);
+          direction = shapeDelta >= 0 ? 1 : -1;
         } else {
-          dist = haversineDistance(
-            prev.targetLat,
-            prev.targetLon,
-            v.latitude,
-            v.longitude
-          );
+          dist = haversineDistance(prev.lat, prev.lon, v.latitude, v.longitude);
         }
 
-        const maxSpeed =
-          v.mode === "metro" || v.mode === "vline" ? 33.3 : 22.2;
+        const maxSpeed = v.mode === "metro" || v.mode === "vline" ? 33.3 : 22.2;
         v.speed = Math.min(dist / dt, maxSpeed);
 
-        // Compute bearing from consecutive poll positions.
-        // This is ground truth — works regardless of shape direction.
-        // Only update if vehicle moved enough (>5m) to give a reliable bearing.
-        if (dist > 5) {
-          v.bearing = calculateBearing(
-            prev.targetLat,
-            prev.targetLon,
-            v.latitude,
-            v.longitude
-          );
-        } else if (prev.bearing > 0) {
-          v.bearing = prev.bearing; // Carry forward if stationary
+        // Bearing from shape direction + travel direction
+        if (shape && snapDist >= 0) {
+          v.bearing = bearingAtDist(shape, snapDist, direction);
+        } else if (dist > 5) {
+          v.bearing = calculateBearing(prev.lat, prev.lon, v.latitude, v.longitude);
+        } else {
+          v.bearing = prev.bearing;
         }
 
-        // Promote: previous target becomes origin, new position becomes target
         vehicleStates.set(v.entityId, {
-          originLat: prev.targetLat,
-          originLon: prev.targetLon,
-          originShapeDist: prev.targetShapeDist,
-          originTimestamp: prev.targetTimestamp,
-
-          targetLat: v.latitude,
-          targetLon: v.longitude,
-          targetShapeDist: snapDist,
-          targetTimestamp: v.timestamp,
-
-          bearing: v.bearing,
+          lat: v.latitude,
+          lon: v.longitude,
+          shapeDist: snapDist,
+          timestamp: v.timestamp,
           speed: v.speed,
-          shapeId: v.shapeId,
-          targetReceivedAt: nowMs,
-          travelTimeMs: Math.max(dt * 1000, config.pollIntervalMs),
+          direction,
+          bearing: v.bearing,
+          receivedAt: nowMs,
         });
       } else {
-        // Same timestamp — feed cache returned identical data.
-        // Carry forward speed/bearing but do NOT reset targetReceivedAt.
-        // This lets the interpolation engine keep projecting forward
-        // past the target using the last known speed.
+        // Duplicate poll — carry forward
         v.speed = prev.speed;
-        v.bearing = prev.bearing; // Always carry forward on duplicate
-        // Don't update vehicleStates — keep the existing origin/target/receivedAt
+        v.bearing = prev.bearing;
       }
     } else {
-      // First sighting — no origin yet, can't interpolate
+      // First sighting
+      if (shape && snapDist >= 0) {
+        v.bearing = bearingAtDist(shape, snapDist, 1);
+      }
+
       vehicleStates.set(v.entityId, {
-        originLat: v.latitude,
-        originLon: v.longitude,
-        originShapeDist: snapDist,
-        originTimestamp: v.timestamp,
-
-        targetLat: v.latitude,
-        targetLon: v.longitude,
-        targetShapeDist: snapDist,
-        targetTimestamp: v.timestamp,
-
-        bearing: v.bearing,
+        lat: v.latitude,
+        lon: v.longitude,
+        shapeDist: snapDist,
+        timestamp: v.timestamp,
         speed: 0,
-        shapeId: v.shapeId,
-        targetReceivedAt: nowMs,
-        travelTimeMs: config.pollIntervalMs,
+        direction: 1,
+        bearing: v.bearing,
+        receivedAt: nowMs,
       });
     }
   }
 
-  // Clean up departed vehicles
+  // Clean up departed
   const currentIds = new Set(vehicles.map((v) => v.entityId));
   for (const key of vehicleStates.keys()) {
-    if (!currentIds.has(key)) {
-      vehicleStates.delete(key);
-    }
+    if (!currentIds.has(key)) vehicleStates.delete(key);
   }
 
   return vehicles;
 }
 
-/**
- * Clean up trails for vehicles no longer in the feed.
- * Called during broadcast cycle.
- */
-export function cleanupTrails(vehicles: VehiclePosition[]): void {
+// ── Interpolate for broadcast ──
+//
+// Advances each vehicle along its shape by speed × elapsed.
+// Trail is appended from the shape-interpolated position, so
+// the trail follows the road. Bearing is derived from shape
+// direction at the interpolated point.
+
+export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
+  const nowMs = Date.now();
+
+  // Clean departed trails
   const currentIds = new Set(vehicles.map((v) => v.entityId));
   for (const key of vehicleTrails.keys()) {
     if (!currentIds.has(key)) vehicleTrails.delete(key);
   }
+
+  return vehicles.map((v) => {
+    if (v.stale) return v;
+
+    const state = vehicleStates.get(v.entityId);
+    if (!state || state.speed < 0.5) return v;
+
+    const shape = state.shapeDist >= 0
+      ? (getShapeForTrip(v.tripId) ?? getShapeForRoute(v.routeId))
+      : undefined;
+
+    if (shape && shape.length >= 2) {
+      // Advance along shape
+      const elapsedSec = (nowMs - state.receivedAt) / 1000;
+      const advanceM = state.speed * elapsedSec * state.direction;
+      let newDist = state.shapeDist + advanceM;
+
+      const total = shapeLength(shape);
+      newDist = Math.max(0, Math.min(newDist, total));
+
+      const pos = sampleShape(shape, newDist);
+      if (pos) {
+        const bearing = bearingAtDist(shape, newDist, state.direction);
+        appendTrail(v.entityId, pos.lon, pos.lat, v.mode);
+        return {
+          ...v,
+          latitude: pos.lat,
+          longitude: pos.lon,
+          bearing,
+          shapeDistTraveled: newDist,
+        };
+      }
+    }
+
+    // Fallback: no shape — straight-line projection
+    if (state.bearing === 0) return v;
+
+    const elapsedSec = (nowMs - state.receivedAt) / 1000;
+    const distM = state.speed * elapsedSec;
+    const DEG = Math.PI / 180;
+    const latOff = (distM * Math.cos(state.bearing * DEG)) / 111_000;
+    const lonOff = (distM * Math.sin(state.bearing * DEG)) / (111_000 * Math.cos(state.lat * DEG));
+    const newLat = state.lat + latOff;
+    const newLon = state.lon + lonOff;
+
+    appendTrail(v.entityId, newLon, newLat, v.mode);
+    return { ...v, latitude: newLat, longitude: newLon };
+  });
 }

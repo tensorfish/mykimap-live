@@ -1,8 +1,8 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
-import type { VehiclePosition, TransportMode } from "./types.js";
+import type { TransportMode } from "./types.js";
 import { store, getVehicles, getTrails, getSelectedEntityId, getRouteShape, selectVehicle } from "./store.js";
-import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, updateAnchors, computeDisplayVehicles } from "./layers.js";
+import { createVehicleLayer, createTrailLayer, createRouteShapeLayer } from "./layers.js";
 
 const INITIAL_VIEW = {
   longitude: 144.963,
@@ -44,14 +44,14 @@ export function initMap(
     },
   });
 
-  // Cursor: pointer on hover over vehicle arrows
+  // Cursor: pointer on hover
   map.on("mousemove", (e) => {
     if (!deck) return;
     const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
     map.getCanvas().style.cursor = picked?.object?.entityId ? "pointer" : "";
   });
 
-  // Click: select/deselect vehicle
+  // Click: select/deselect
   map.on("click", (e) => {
     if (!deck) return;
     const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
@@ -78,61 +78,35 @@ export function initMap(
     });
   });
 
-  // ── State ──
+  // ── Update layers when store changes ──
+  // Server interpolates along route shapes at 1s ticks.
+  // deck.gl transitions handle the smooth animation between ticks.
+  // No client-side projection needed.
 
-  let currentVehicles: VehiclePosition[] = [];
-  let currentTrails: Record<string, Array<[number, number]>> = {};
-
-  // Update anchors when new data arrives from the server
   store.subscribe(() => {
+    if (!deck) return;
+
     const vehicles = getVehicles();
-    const trails = getTrails();
     if (vehicles.length === 0) return;
 
-    updateAnchors(vehicles);
-    currentVehicles = vehicles;
-    currentTrails = trails;
-  });
-
-  // ── 60fps render loop ──
-  // Runs continuously. Each frame computes fresh projected positions
-  // for all vehicles using their speed + bearing + elapsed time.
-  // This is what makes the arrows move smoothly — not server ticks.
-
-  function renderFrame() {
-    if (!deck || currentVehicles.length === 0) {
-      requestAnimationFrame(renderFrame);
-      return;
-    }
-
+    const trails = getTrails();
     const selectedId = getSelectedEntityId();
     const routeShape = getRouteShape();
 
-    // Compute projected positions for THIS frame
-    const displayVehicles = computeDisplayVehicles(currentVehicles);
-
-    // Find selected mode for route shape coloring
     let selectedMode: TransportMode | null = null;
     if (selectedId) {
-      const v = currentVehicles.find((v) => v.entityId === selectedId);
+      const v = vehicles.find((v) => v.entityId === selectedId);
       if (v) selectedMode = v.mode;
     }
 
     deck.setProps({
       layers: [
         createRouteShapeLayer(routeShape, selectedMode),
-        createTrailLayer(currentVehicles, currentTrails, selectedId),
-        createVehicleLayer(displayVehicles, selectedId),
+        createTrailLayer(vehicles, trails, selectedId),
+        createVehicleLayer(vehicles, selectedId),
       ],
     });
-
-    requestAnimationFrame(renderFrame);
-  }
-
-  // Start the render loop immediately — it will render once data arrives
-  requestAnimationFrame(renderFrame);
-
-  map.on("load", () => {
-    onReady();
   });
+
+  map.on("load", () => onReady());
 }

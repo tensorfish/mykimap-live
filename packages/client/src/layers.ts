@@ -26,118 +26,26 @@ function getArrowIconUrl(): string {
   return arrowIconUrl;
 }
 
-// ── Continuous projection engine ──
-
-const DEG_TO_RAD = Math.PI / 180;
-
-interface Anchor {
-  lon: number;
-  lat: number;
-  bearing: number;
-  speed: number;
-  receivedAt: number;
-}
-
-const anchors = new Map<string, Anchor>();
-
-export function updateAnchors(vehicles: VehiclePosition[]): void {
-  const now = Date.now();
-  const seen = new Set<string>();
-
-  for (const v of vehicles) {
-    seen.add(v.entityId);
-    const existing = anchors.get(v.entityId);
-
-    if (existing) {
-      // Always update anchor to latest server position.
-      // The projection runs forward from here.
-      existing.lon = v.longitude;
-      existing.lat = v.latitude;
-      existing.bearing = v.bearing;
-      existing.speed = v.speed;
-      existing.receivedAt = now;
-    } else {
-      anchors.set(v.entityId, {
-        lon: v.longitude,
-        lat: v.latitude,
-        bearing: v.bearing,
-        speed: v.speed,
-        receivedAt: now,
-      });
-    }
-  }
-
-  for (const id of anchors.keys()) {
-    if (!seen.has(id)) anchors.delete(id);
-  }
-}
-
-/** Pre-computed per-frame display data for one vehicle */
-interface DisplayVehicle {
-  entityId: string;
-  mode: TransportMode;
-  position: [number, number];
-  angle: number;
-  stale: boolean;
-  routeId: string;
-  vehicleId: string;
-  vehicleLabel: string;
-  bearing: number;
-  speed: number;
-}
-
-/**
- * Compute display positions for ALL vehicles at the current instant.
- * Called every requestAnimationFrame. Returns a new array each time
- * so deck.gl always re-evaluates.
- */
-export function computeDisplayVehicles(vehicles: VehiclePosition[]): DisplayVehicle[] {
-  const now = Date.now();
-
-  return vehicles.map((v) => {
-    const a = anchors.get(v.entityId);
-
-    let lon = v.longitude;
-    let lat = v.latitude;
-
-    if (a && a.speed >= 0.5 && !v.stale) {
-      const elapsedSec = (now - a.receivedAt) / 1000;
-      const distM = a.speed * elapsedSec;
-      const bearingRad = a.bearing * DEG_TO_RAD;
-      lat = a.lat + (distM * Math.cos(bearingRad)) / 111_000;
-      lon = a.lon + (distM * Math.sin(bearingRad)) / (111_000 * Math.cos(a.lat * DEG_TO_RAD));
-    }
-
-    return {
-      entityId: v.entityId,
-      mode: v.mode,
-      position: [lon, lat] as [number, number],
-      angle: -(a?.bearing ?? v.bearing),
-      stale: v.stale,
-      routeId: v.routeId,
-      vehicleId: v.vehicleId,
-      vehicleLabel: v.vehicleLabel,
-      bearing: v.bearing,
-      speed: v.speed,
-    };
-  });
-}
-
 // ── Vehicle arrow layer ──
+//
+// Server sends positions interpolated along route shapes every 1s.
+// Client renders directly — no client-side projection.
+// Smooth movement comes from deck.gl transitions matching by
+// stable array order (server sorts by entityId).
 
 export function createVehicleLayer(
-  displayVehicles: DisplayVehicle[],
+  vehicles: VehiclePosition[],
   selectedId: string | null
 ) {
   const hasSelection = selectedId !== null;
 
-  return new IconLayer<DisplayVehicle>({
+  return new IconLayer<VehiclePosition>({
     id: "vehicles",
-    data: displayVehicles,
+    data: vehicles,
     iconAtlas: getArrowIconUrl(),
     iconMapping: ARROW_ICON_MAPPING,
     getIcon: () => "arrow",
-    getPosition: (d) => d.position,
+    getPosition: (d) => [d.longitude, d.latitude],
     getColor: (d) => {
       if (hasSelection && d.entityId !== selectedId) return DIMMED_COLOR;
       if (d.stale) return [...STALE_COLOR, 160];
@@ -147,17 +55,26 @@ export function createVehicleLayer(
       if (hasSelection && d.entityId === selectedId) return MODE_SIZE[d.mode] * 1.4;
       return MODE_SIZE[d.mode];
     },
-    getAngle: (d) => d.angle,
+    getAngle: (d) => -d.bearing,
     sizeScale: 1,
     sizeUnits: "pixels" as const,
     sizeMinPixels: 8,
     sizeMaxPixels: 40,
     pickable: true,
     billboard: false,
+
+    // Smooth transitions between 1s server ticks.
+    // Server sorts by entityId so array order is stable.
+    transitions: {
+      getPosition: { duration: 1000, easing: (t: number) => t },
+      getAngle: { duration: 1000, easing: (t: number) => t },
+    },
   });
 }
 
 // ── Trail layer ──
+// Trail data comes from the server, sampled from the route shape.
+// It follows the road because the server interpolates along shapes.
 
 interface TrailData {
   entityId: string;

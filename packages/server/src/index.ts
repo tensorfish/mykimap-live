@@ -2,7 +2,7 @@ import { config } from "./config.js";
 import { ServerStateMachine } from "./state-machine.js";
 import { loadProtoSchema } from "./poller/decoder.js";
 import { poll } from "./poller/index.js";
-import { processSnapshot, cleanupTrails, getTrails } from "./interpolation/index.js";
+import { processSnapshot, interpolate, getTrails } from "./interpolation/index.js";
 import { addClient, removeClient, broadcast, clientCount } from "./broadcast/index.js";
 import { loadShapes, shapeStats, getShapeForTrip, getShapeForRoute } from "./shapes/index.js";
 import { log } from "./logger.js";
@@ -169,18 +169,14 @@ function broadcastCycle(): void {
   const now = Date.now();
   lastBroadcastTime = now;
 
-  // Clean up trails for departed vehicles
-  cleanupTrails(currentVehicles);
-
-  // Send snapped positions + speed + bearing as anchor data.
-  // Client does all visual projection at 60fps.
-  const sorted = currentVehicles
-    .slice()
+  // Interpolate: advance each vehicle along its route shape.
+  // Trail + bearing both derived from shape geometry.
+  const interpolated = interpolate(currentVehicles)
     .sort((a, b) => (a.entityId < b.entityId ? -1 : a.entityId > b.entityId ? 1 : 0));
 
   const state: WorldState = {
     timestamp: Math.floor(now / 1000),
-    vehicles: sorted,
+    vehicles: interpolated,
     trails: getTrails(),
     alerts: currentAlerts,
     serverState: sm.state,

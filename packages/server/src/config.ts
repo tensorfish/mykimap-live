@@ -26,9 +26,9 @@ export const config = {
 
   /** Polling intervals — 15s against a ~30s server-side cache means we catch each refresh within one poll */
   pollIntervalMs: parseInt(optionalEnv("POLL_INTERVAL_MS", "15000"), 10),
-  /** Client projects at 60fps using speed+bearing — server ticks are just corrections */
+  /** Server interpolates along route shapes and broadcasts every tick */
   broadcastIntervalMs: parseInt(
-    optionalEnv("BROADCAST_INTERVAL_MS", "2000"),
+    optionalEnv("BROADCAST_INTERVAL_MS", "1000"),
     10
   ),
 
