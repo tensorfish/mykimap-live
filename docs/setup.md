@@ -3,8 +3,8 @@
 ## Prerequisites
 
 - [Bun](https://bun.sh) (runtime and package manager)
-- A [Transport Victoria Open Data](https://opendata.transport.vic.gov.au) API key
-- A [Mapbox](https://account.mapbox.com/access-tokens/) access token
+- A [Transport Victoria Open Data](https://opendata.transport.vic.gov.au) API key (free — register and check your profile)
+- A [Mapbox](https://account.mapbox.com/access-tokens/) access token (free tier works)
 
 ## Install
 
@@ -14,26 +14,18 @@ bun install
 
 ## Configure
 
-Copy the example env file and fill in your keys:
-
 ```bash
 cp .env.example .env
 ```
 
-```env
-OPENDATA_VIC_API_KEY=your-api-key-here
-MAPBOX_ACCESS_TOKEN=your-mapbox-token-here
-```
-
-The client reads its Mapbox token from `VITE_MAPBOX_ACCESS_TOKEN` (Vite exposes env vars prefixed with `VITE_`). Add this to `.env` as well:
+Fill in both keys:
 
 ```env
-VITE_MAPBOX_ACCESS_TOKEN=your-mapbox-token-here
+OPENDATA_VIC_API_KEY=your-transport-vic-key
+VITE_MAPBOX_ACCESS_TOKEN=your-mapbox-token
 ```
 
-## Development
-
-Run the server and client simultaneously:
+## Run
 
 ```bash
 # Terminal 1 — server (port 3000)
@@ -43,11 +35,7 @@ bun run dev:server
 bun run dev:client
 ```
 
-Or run everything:
-
-```bash
-bun run dev
-```
+On first run the server downloads the GTFS Schedule (~191 MB) to build the route shape index. This is cached in `.cache/gtfs/` and only happens once. If the download fails, the server continues without shapes (straight-line interpolation fallback).
 
 ## Build
 
@@ -59,8 +47,16 @@ bun run build
 
 ```
 packages/
-  server/       → Bun backend: polls GTFS-RT, interpolates, broadcasts via WebSocket
-  client/       → Vite frontend: deck.gl + Mapbox map, TanStack Store for state
+  server/       → Bun backend
+    src/
+      poller/         Feed fetching + protobuf decoding
+      shapes/         GTFS Schedule loader, shape index, polyline snapping
+      interpolation/  Origin→target traversal along shapes, geo math
+      broadcast/      WebSocket client management
+    proto/            gtfs-realtime.proto schema
+  client/       → Vite frontend (vanilla TS, no framework)
+    src/              Store, WebSocket, map, layers (arrows + trails), icons, UI
 docs/           → This VitePress documentation site
 .memory/        → Design documents and data analysis
+.cache/gtfs/    → Cached GTFS Schedule ZIP + extracted files (gitignored)
 ```

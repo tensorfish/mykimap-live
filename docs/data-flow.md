@@ -45,12 +45,15 @@ flowchart LR
 flowchart LR
     STATE["Current\nworld state"] --> CHECK{"Vehicle\nstale?"}
     CHECK -- Yes --> HOLD["Hold at last\nknown position"]
-    CHECK -- No --> HASSHAPE{"Has matched\nshape?"}
-    HASSHAPE -- Yes --> ADVANCE["Advance along\nshape polyline\nspeed × Δt"]
-    HASSHAPE -- No --> PROJECT["Straight-line\nprojection\n(fallback)"]
+    CHECK -- No --> PROGRESS{"t = elapsed /\ntravel time"}
+    PROGRESS -- "t ≤ 1" --> LERP["Lerp origin → target\nalong shape"]
+    PROGRESS -- "t > 1" --> OVERSHOOT["Project past target\nspeed × overshoot\nalong shape"]
+    LERP --> FALLBACK
+    OVERSHOOT --> FALLBACK
     HOLD --> JSON["Serialize\nto JSON"]
-    ADVANCE --> JSON
-    PROJECT --> JSON
+    FALLBACK{"Has shape?"} -- No --> STRAIGHT["Straight-line\nlerp/projection"]
+    FALLBACK -- Yes --> JSON
+    STRAIGHT --> JSON
     JSON --> SEND["Send to all\nWebSocket clients"]
 ```
 

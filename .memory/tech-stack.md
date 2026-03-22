@@ -104,7 +104,7 @@ These shape the server's interpolation design:
 - **No speed on any feed.** Must be derived from consecutive position deltas.
 - **No bearing on trams.** Must be inferred from consecutive lat/lon changes. Trains, buses, and V/Line do provide bearing.
 - **Per-vehicle freshness varies wildly** within a single snapshot (10s to 15min). Stale vehicles are likely parked — do not interpolate them.
-- **Feed caches for ~30s server-side.** Polling faster is wasted.
+- **Feed caches for ~30s server-side.** Most 7s polls return identical data, but we catch changes within 7s of them appearing.
 - **~2,000 vehicles total** across 4 position feeds. Bus dominates (~1,700).
 - **Trip updates use absolute times**, not delay offsets. `arrival.delay` is always 0 — use `arrival.time` instead.
 - **Service alerts exist for train and tram only** — no bus or V/Line alerts.

@@ -15,7 +15,7 @@ features:
   - title: ~2,000 vehicles
     details: Metro trains, trams, buses, and V/Line regional services — all tracked simultaneously.
   - title: Smooth animation
-    details: deck.gl GPU-accelerated rendering with server-side interpolation between 30-second feed updates.
+    details: Vehicles follow actual roads and tracks via GTFS shape snapping. deck.gl GPU-accelerated rendering with server-side interpolation every second.
   - title: Multi-client sync
     details: Every open browser window shows vehicles in the same position — server-authoritative state.
 ---

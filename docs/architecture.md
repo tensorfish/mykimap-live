@@ -14,8 +14,8 @@ flowchart TB
     subgraph SERVER["Server (Bun.serve)"]
         direction LR
         POLL[Poll] --> DECODE[Decode\nprotobuf]
-        DECODE --> DIFF[Diff &\ncalculate]
-        DIFF --> INTERP[Interpolate]
+        DECODE --> SNAP[Snap to\nroute shapes]
+        SNAP --> INTERP[Interpolate\norigin → target]
         INTERP --> BCAST[Broadcast]
     end
 
@@ -37,8 +37,8 @@ flowchart TB
 
 1. **Poll** 10 GTFS-RT feeds every 7 seconds in parallel
 2. **Decode** Protocol Buffer responses into typed vehicle positions, trip updates, and service alerts
-3. **Diff** new vehicle positions against the previous snapshot to calculate speed and bearing
-4. **Interpolate** positions between polls so vehicles appear to move smoothly
+3. **Snap** each vehicle onto its GTFS route shape polyline (`trip_id` → `shape_id`). Calculate speed from distance traveled along the shape.
+4. **Interpolate** between polls: traverse from previous position (origin) to new position (target) along the shape, then project forward. No teleporting, no building-cutting.
 5. **Broadcast** the interpolated world state to all connected WebSocket clients every ~1 second
 
 ### State machine
