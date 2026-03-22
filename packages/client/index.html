@@ -2,17 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>Melbourne Transport Map</title>
-    <link
-      href="https://api.mapbox.com/mapbox-gl-js/v3.9.2/mapbox-gl.css"
-      rel="stylesheet"
-    />
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.2/mapbox-gl.css" rel="stylesheet" />
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; font-family: system-ui, -apple-system, sans-serif; }
       #map { width: 100%; height: 100%; }
 
+      /* ── Status bar ── */
       #status {
         position: absolute;
         top: 12px;
@@ -23,11 +21,11 @@
         padding: 8px 14px;
         border-radius: 6px;
         font-size: 13px;
-        line-height: 1.4;
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
         pointer-events: auto;
+        backdrop-filter: blur(8px);
       }
       #status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
       #reconnect-btn {
@@ -36,14 +34,57 @@
         border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px;
       }
 
+      /* ── Filter bar ── */
+      #filters {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        z-index: 2;
+        background: rgba(0, 0, 0, 0.75);
+        color: #fff;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+        pointer-events: auto;
+        backdrop-filter: blur(8px);
+        max-width: calc(100% - 24px);
+      }
+      .filter-chip {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 4px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        user-select: none;
+        border: 1px solid rgba(255,255,255,0.15);
+        transition: opacity 0.15s;
+      }
+      .filter-chip.off { opacity: 0.35; }
+      .filter-chip .dot {
+        width: 8px; height: 8px; border-radius: 50%;
+      }
+      .filter-divider {
+        width: 1px; height: 20px; background: rgba(255,255,255,0.15); margin: 0 2px;
+      }
+      .filter-chip.alert-chip {
+        border-color: #f0ad4e55;
+      }
+      .filter-chip.alert-chip .dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: #f0ad4e;
+      }
+
       /* ── Vehicle info panel ── */
       #panel {
         display: none;
         position: absolute;
-        top: 0;
-        right: 0;
-        width: 340px;
-        height: 100%;
+        top: 0; right: 0;
+        width: 340px; height: 100%;
         background: rgba(10, 10, 14, 0.92);
         color: #e0e0e0;
         z-index: 3;
@@ -53,79 +94,50 @@
       }
       #panel.open { display: block; }
       #panel-close {
-        position: absolute;
-        top: 10px;
-        right: 12px;
-        background: none;
-        border: none;
-        color: #888;
-        font-size: 20px;
-        cursor: pointer;
-        padding: 4px 8px;
-        line-height: 1;
+        position: absolute; top: 10px; right: 12px;
+        background: none; border: none; color: #888;
+        font-size: 20px; cursor: pointer; padding: 4px 8px; line-height: 1;
       }
       #panel-close:hover { color: #fff; }
       #panel-content { padding: 20px; }
       #panel-content h2 {
-        font-size: 15px;
-        font-weight: 600;
-        margin: 0 0 16px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        font-size: 15px; font-weight: 600; margin: 0 0 16px;
+        text-transform: uppercase; letter-spacing: 0.5px;
       }
       .panel-mode-badge {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 3px;
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 14px;
+        display: inline-block; padding: 2px 10px; border-radius: 3px;
+        font-size: 11px; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.5px; margin-bottom: 14px;
       }
       .panel-field { margin-bottom: 12px; }
       .panel-field-label {
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        color: #777;
-        margin-bottom: 2px;
+        font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px;
+        color: #777; margin-bottom: 2px;
       }
-      .panel-field-value {
-        font-size: 14px;
-        font-variant-numeric: tabular-nums;
-      }
-      .panel-divider {
-        border: none;
-        border-top: 1px solid rgba(255,255,255,0.08);
-        margin: 16px 0;
-      }
+      .panel-field-value { font-size: 14px; font-variant-numeric: tabular-nums; }
+      .panel-divider { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 16px 0; }
       .panel-alert {
-        background: rgba(255, 170, 0, 0.1);
-        border-left: 3px solid #f0ad4e;
-        padding: 8px 10px;
-        margin-bottom: 8px;
-        font-size: 12px;
-        line-height: 1.4;
+        background: rgba(255, 170, 0, 0.1); border-left: 3px solid #f0ad4e;
+        padding: 8px 10px; margin-bottom: 8px; font-size: 12px; line-height: 1.4;
         border-radius: 0 4px 4px 0;
       }
       .panel-alert-header { font-weight: 600; margin-bottom: 3px; }
       .panel-subtle { opacity: 0.45; }
       .panel-subtle-row {
-        display: flex;
-        justify-content: space-between;
-        font-size: 11px;
-        line-height: 1.8;
+        display: flex; justify-content: space-between; font-size: 11px; line-height: 1.8;
       }
       .panel-subtle-label { color: #888; }
       .panel-subtle-value {
-        color: #aaa;
-        font-variant-numeric: tabular-nums;
-        text-align: right;
-        max-width: 60%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        color: #aaa; font-variant-numeric: tabular-nums; text-align: right;
+        max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+
+      /* ── Mobile ── */
+      @media (max-width: 640px) {
+        #status { top: auto; bottom: 12px; left: 8px; right: 8px; font-size: 12px; padding: 6px 10px; }
+        #filters { top: 8px; left: 8px; right: 8px; font-size: 11px; padding: 6px 8px; gap: 4px; }
+        .filter-chip { padding: 3px 7px; font-size: 11px; }
+        #panel { width: 100%; border-left: none; border-top: 1px solid rgba(255,255,255,0.08); }
       }
     </style>
   </head>
@@ -137,6 +149,15 @@
       <span id="status-label">Loading…</span>
       <span id="status-info" style="color: #aaa"></span>
       <button id="reconnect-btn">Reconnect</button>
+    </div>
+
+    <div id="filters">
+      <div class="filter-chip" data-filter="metro"><span class="dot" style="background:#34ACE1"></span>Trains</div>
+      <div class="filter-chip" data-filter="tram"><span class="dot" style="background:#78BE20"></span>Trams</div>
+      <div class="filter-chip" data-filter="bus"><span class="dot" style="background:#FF8200"></span>Buses</div>
+      <div class="filter-chip" data-filter="vline"><span class="dot" style="background:#A57FB2"></span>V/Line</div>
+      <div class="filter-divider"></div>
+      <div class="filter-chip alert-chip off" data-filter="highlightAlerts"><span class="dot"></span>Disruptions</div>
     </div>
 
     <div id="panel">

@@ -1,6 +1,7 @@
 import { initMap } from "./map.js";
 import { initStatusBar } from "./ui.js";
 import { initPanel } from "./panel.js";
+import { initFilters } from "./filters.js";
 import { connect } from "./ws.js";
 import { transition } from "./store.js";
 
@@ -17,6 +18,7 @@ if (!MAPBOX_TOKEN) {
 
   initStatusBar();
   initPanel();
+  initFilters();
 
   initMap(container, MAPBOX_TOKEN, () => {
     transition("CONNECTING", "Map loaded");
