@@ -76,6 +76,12 @@ export function connect(): void {
   ws.onerror = () => {};
 }
 
+export function disconnect(): void {
+  clearStaleTimer();
+  retries = MAX_RETRIES; // prevent auto-reconnect
+  if (ws) { ws.close(); ws = null; }
+}
+
 export function reconnect(): void {
   retries = 0;
   if (ws) { ws.close(); ws = null; }
