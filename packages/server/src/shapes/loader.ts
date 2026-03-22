@@ -19,13 +19,27 @@ const MODE_FOLDERS: Record<TransportMode, string[]> = {
 /** trip_id → shape_id */
 const tripToShape = new Map<string, string>();
 
+/** route_id → shape_id (first shape found for this route — fallback for unmatched trip_ids) */
+const routeToShape = new Map<string, string>();
+
 /** shape_id → polyline with cumulative distances */
 const shapeIndex = new Map<string, ShapePolyline>();
 
 export function getShapeForTrip(tripId: string): ShapePolyline | undefined {
   const shapeId = tripToShape.get(tripId);
-  if (!shapeId) return undefined;
-  return shapeIndex.get(shapeId);
+  if (shapeId) return shapeIndex.get(shapeId);
+  return undefined;
+}
+
+/**
+ * Fallback: get any shape for a route_id.
+ * Used when trip_id doesn't match the static schedule (e.g. trams
+ * where the schedule version segment in the trip_id changes frequently).
+ */
+export function getShapeForRoute(routeId: string): ShapePolyline | undefined {
+  const shapeId = routeToShape.get(routeId);
+  if (shapeId) return shapeIndex.get(shapeId);
+  return undefined;
 }
 
 export function getShapeById(shapeId: string): ShapePolyline | undefined {
@@ -33,7 +47,7 @@ export function getShapeById(shapeId: string): ShapePolyline | undefined {
 }
 
 export function shapeStats() {
-  return { trips: tripToShape.size, shapes: shapeIndex.size };
+  return { trips: tripToShape.size, shapes: shapeIndex.size, routes: routeToShape.size };
 }
 
 /**
@@ -127,16 +141,20 @@ async function extractAndParse(
     await Bun.write(shapesPath, text);
   }
 
+  /** Strip quotes and \r from a CSV field */
+  const clean = (s: string | undefined) => (s ?? "").replace(/"/g, "").replace(/\r/g, "").trim();
+
   // Parse trips.txt → tripToShape
   log("info", `Parsing trips for folder ${folder}...`);
   const tripsText = await Bun.file(tripsPath).text();
   const tripsLines = tripsText.split("\n");
-  const tripsHeader = tripsLines[0]!.replace(/^\uFEFF/, "").split(",");
+  const tripsHeader = tripsLines[0]!.replace(/^\uFEFF/, "").split(",").map(clean);
   const tripIdCol = tripsHeader.indexOf("trip_id");
   const shapeIdCol = tripsHeader.indexOf("shape_id");
+  const routeIdCol = tripsHeader.indexOf("route_id");
 
   if (tripIdCol === -1 || shapeIdCol === -1) {
-    log("warn", `trips.txt for folder ${folder} missing columns, skipping`);
+    log("warn", `trips.txt for folder ${folder} missing columns (got: ${tripsHeader.join(",")}), skipping`);
     return;
   }
 
@@ -144,10 +162,15 @@ async function extractAndParse(
     const line = tripsLines[i]!;
     if (!line.trim()) continue;
     const cols = line.split(",");
-    const tripId = cols[tripIdCol]?.replace(/"/g, "") ?? "";
-    const shapeId = cols[shapeIdCol]?.replace(/"/g, "") ?? "";
+    const tripId = clean(cols[tripIdCol]);
+    const shapeId = clean(cols[shapeIdCol]);
+    const routeId = routeIdCol !== -1 ? clean(cols[routeIdCol]) : "";
     if (tripId && shapeId) {
       tripToShape.set(tripId, shapeId);
+      // Store first shape per route as fallback (for trams whose trip_ids don't match)
+      if (routeId && !routeToShape.has(routeId)) {
+        routeToShape.set(routeId, shapeId);
+      }
     }
   }
 
@@ -155,7 +178,7 @@ async function extractAndParse(
   log("info", `Parsing shapes for folder ${folder}...`);
   const shapesText = await Bun.file(shapesPath).text();
   const shapesLines = shapesText.split("\n");
-  const shapesHeader = shapesLines[0]!.replace(/^\uFEFF/, "").split(",");
+  const shapesHeader = shapesLines[0]!.replace(/^\uFEFF/, "").split(",").map(clean);
   const sIdCol = shapesHeader.indexOf("shape_id");
   const sLatCol = shapesHeader.indexOf("shape_pt_lat");
   const sLonCol = shapesHeader.indexOf("shape_pt_lon");
@@ -163,7 +186,7 @@ async function extractAndParse(
   const sDistCol = shapesHeader.indexOf("shape_dist_traveled");
 
   if (sIdCol === -1 || sLatCol === -1 || sLonCol === -1) {
-    log("warn", `shapes.txt for folder ${folder} missing columns, skipping`);
+    log("warn", `shapes.txt for folder ${folder} missing columns (got: ${shapesHeader.join(",")}), skipping`);
     return;
   }
 
@@ -174,11 +197,11 @@ async function extractAndParse(
     const line = shapesLines[i]!;
     if (!line.trim()) continue;
     const cols = line.split(",");
-    const id = cols[sIdCol]?.replace(/"/g, "") ?? "";
-    const lat = parseFloat(cols[sLatCol] ?? "");
-    const lon = parseFloat(cols[sLonCol] ?? "");
-    const seq = parseInt(cols[sSeqCol] ?? "0", 10);
-    const dist = sDistCol !== -1 ? parseFloat(cols[sDistCol] ?? "0") : -1;
+    const id = clean(cols[sIdCol]);
+    const lat = parseFloat(clean(cols[sLatCol]));
+    const lon = parseFloat(clean(cols[sLonCol]));
+    const seq = parseInt(clean(cols[sSeqCol]) || "0", 10);
+    const dist = sDistCol !== -1 ? parseFloat(clean(cols[sDistCol]) || "0") : -1;
 
     if (!id || isNaN(lat) || isNaN(lon)) continue;
 

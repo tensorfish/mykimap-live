@@ -7,6 +7,7 @@ import {
 } from "./geo.js";
 import {
   getShapeForTrip,
+  getShapeForRoute,
   snapToShape,
   sampleShape,
   shapeLength,
@@ -66,7 +67,8 @@ export function processSnapshot(
     v.stale = age * 1000 > config.staleVehicleThresholdMs;
 
     // Try to match vehicle to a shape polyline
-    const shape = getShapeForTrip(v.tripId);
+    // Primary: trip_id match. Fallback: route_id match (trams need this).
+    const shape = getShapeForTrip(v.tripId) ?? getShapeForRoute(v.routeId);
     let snapDist = -1;
 
     if (shape && shape.length >= 2) {
@@ -203,7 +205,9 @@ export function interpolate(
     const elapsed = nowMs - state.targetReceivedAt;
     const t = elapsed / state.travelTimeMs;
 
-    const shape = state.shapeId ? getShapeForTrip(v.tripId) : undefined;
+    const shape = state.shapeId
+      ? (getShapeForTrip(v.tripId) ?? getShapeForRoute(v.routeId))
+      : undefined;
 
     // ── Shape-following interpolation ──
     if (
