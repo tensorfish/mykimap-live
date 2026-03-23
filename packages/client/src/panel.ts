@@ -1,4 +1,5 @@
 import { store, selectVehicle } from "./store.js";
+import { getPlaybackState } from "./playback.js";
 import type { VehiclePosition, TransportMode, ServiceAlert } from "./types.js";
 
 const MODE_LABELS: Record<TransportMode, string> = {
@@ -131,7 +132,10 @@ function bearingLabel(deg: number): string {
 
 function timeAgo(posix: number): string {
   if (!posix) return "—";
-  const seconds = Math.floor(Date.now() / 1000) - posix;
+  // In playback mode, use the playback timestamp as "now"
+  const pb = getPlaybackState();
+  const now = pb.active ? pb.currentTimestamp : Date.now() / 1000;
+  const seconds = Math.floor(now - posix);
   if (seconds < 0) return "just now";
   if (seconds < 5) return "just now";
   if (seconds < 60) return `${seconds}s ago`;

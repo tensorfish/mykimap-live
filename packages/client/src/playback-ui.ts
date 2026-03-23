@@ -124,23 +124,15 @@ export function initPlaybackUI(): void {
       }
     }
 
-    // Time label — show playback time + elapsed
+    // Time label
     if (state.active) {
       const d = new Date(state.currentTimestamp * 1000);
-      const time = d.toLocaleTimeString("en-AU", {
+      timeLabel.textContent = d.toLocaleTimeString("en-AU", {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
         timeZone: "Australia/Melbourne",
       });
-      const elapsedSec = Math.floor(state.currentTimestamp - state.minTimestamp);
-      const elapsedMin = Math.floor(elapsedSec / 60);
-      const elapsedHr = Math.floor(elapsedMin / 60);
-      const elapsed = elapsedHr > 0
-        ? `${elapsedHr}h ${elapsedMin % 60}m`
-        : `${elapsedMin}m ${elapsedSec % 60}s`;
-
-      timeLabel.textContent = `${time} (${elapsed} in)`;
     }
 
     playBtn.textContent = state.playing ? "⏸" : "▶";
