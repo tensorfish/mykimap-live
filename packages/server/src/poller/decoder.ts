@@ -1,4 +1,6 @@
 import protobuf from "protobufjs";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { log } from "../logger.js";
 import type {
   TransportMode,
@@ -10,17 +12,29 @@ import type {
 
 // ── Load GTFS-RT proto schema ──
 
-/**
- * We use the official GTFS Realtime proto definition.
- * protobufjs can load it from a .proto file or we can define it inline.
- * For simplicity, we use protobufjs reflection to decode the standard format.
- */
 let FeedMessage: protobuf.Type | null = null;
 
 export async function loadProtoSchema(): Promise<void> {
-  const root = await protobuf.load(
-    new URL("../../proto/gtfs-realtime.proto", import.meta.url).pathname
-  );
+  // Try multiple paths — works in both dev (src/) and prod (dist/)
+  const candidates = [
+    join(import.meta.dir, "../../proto/gtfs-realtime.proto"),
+    join(import.meta.dir, "../proto/gtfs-realtime.proto"),
+    join(process.env.PROJECT_ROOT ?? process.cwd(), "packages/server/proto/gtfs-realtime.proto"),
+  ];
+
+  let protoContent: string | null = null;
+  for (const p of candidates) {
+    try {
+      protoContent = readFileSync(p, "utf-8");
+      break;
+    } catch {}
+  }
+
+  if (!protoContent) {
+    throw new Error(`Proto file not found. Searched: ${candidates.join(", ")}`);
+  }
+
+  const root = protobuf.parse(protoContent).root;
   FeedMessage = root.lookupType("transit_realtime.FeedMessage");
   log("info", "Protobuf schema loaded");
 }
