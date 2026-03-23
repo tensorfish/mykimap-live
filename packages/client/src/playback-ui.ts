@@ -7,13 +7,13 @@ import {
   setSpeed,
   stopPlayback,
   getPlaybackState,
+  onPlaybackChange,
 } from "./playback.js";
 import { connect, disconnect } from "./ws.js";
 
-let isPlaybackMode = false;
-
 export function initPlaybackUI(): void {
   const historyBtn = document.getElementById("history-btn")!;
+  const statusEl = document.getElementById("status")!;
   const playbackEl = document.getElementById("playback")!;
   const closeBtn = document.getElementById("pb-close")!;
   const dateSelect = document.getElementById("pb-date")! as HTMLSelectElement;
@@ -22,91 +22,98 @@ export function initPlaybackUI(): void {
   const timeLabel = document.getElementById("pb-time")!;
   const speedSelect = document.getElementById("pb-speed")! as HTMLSelectElement;
 
-  // History button — switch to playback mode
+  // History button
   historyBtn.addEventListener("click", async () => {
+    historyBtn.textContent = "Loading...";
+    historyBtn.setAttribute("disabled", "");
+
     const dates = await listAvailableDates();
+
+    historyBtn.textContent = "History";
+    historyBtn.removeAttribute("disabled");
+
     if (dates.length === 0) {
       alert("No recordings available. Enable RECORDING_ENABLED on the server.");
       return;
     }
 
-    // Populate date picker
     dateSelect.innerHTML = dates
       .map((d) => `<option value="${d}">${d}</option>`)
       .join("");
-    dateSelect.value = dates[dates.length - 1]!; // Latest date
+    dateSelect.value = dates[dates.length - 1]!;
 
     await enterPlayback(dates[dates.length - 1]!);
   });
 
-  // Close — back to live
-  closeBtn.addEventListener("click", () => {
-    exitPlayback();
-  });
+  closeBtn.addEventListener("click", () => exitPlayback());
 
-  // Date change
   dateSelect.addEventListener("change", async () => {
     await enterPlayback(dateSelect.value);
   });
 
-  // Play/pause
   playBtn.addEventListener("click", () => {
     const state = getPlaybackState();
-    if (state.playing) {
-      pause();
-      playBtn.textContent = "▶";
-    } else {
-      play();
-      playBtn.textContent = "⏸";
-    }
+    if (state.playing) pause();
+    else play();
   });
 
-  // Slider scrub
+  let scrubbing = false;
+  slider.addEventListener("mousedown", () => { scrubbing = true; });
+  slider.addEventListener("touchstart", () => { scrubbing = true; });
   slider.addEventListener("input", () => {
     const state = getPlaybackState();
     const t = parseFloat(slider.value) / 100;
     const ts = state.minTimestamp + t * (state.maxTimestamp - state.minTimestamp);
     seekTo(ts);
-    updateTimeLabel();
   });
+  slider.addEventListener("mouseup", () => { scrubbing = false; });
+  slider.addEventListener("touchend", () => { scrubbing = false; });
 
-  // Speed
   speedSelect.addEventListener("change", () => {
     setSpeed(parseInt(speedSelect.value, 10));
   });
 
-  // Update time label periodically
-  setInterval(updateTimeLabel, 200);
-
-  function updateTimeLabel(): void {
+  // React to playback state changes
+  onPlaybackChange(() => {
     const state = getPlaybackState();
-    if (!state.active) return;
 
-    // Update slider position
-    const range = state.maxTimestamp - state.minTimestamp;
-    if (range > 0) {
-      slider.value = String(((state.currentTimestamp - state.minTimestamp) / range) * 100);
+    // Loading indicator
+    if (state.loading) {
+      timeLabel.textContent = state.loadingProgress;
+      playBtn.setAttribute("disabled", "");
+      slider.setAttribute("disabled", "");
+      return;
     }
 
-    // Time of day in Melbourne
-    const d = new Date(state.currentTimestamp * 1000);
-    timeLabel.textContent = d.toLocaleTimeString("en-AU", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      timeZone: "Australia/Melbourne",
-    });
+    playBtn.removeAttribute("disabled");
+    slider.removeAttribute("disabled");
 
-    // Update play button
+    // Update slider (only if user isn't scrubbing)
+    if (!scrubbing) {
+      const range = state.maxTimestamp - state.minTimestamp;
+      if (range > 0) {
+        slider.value = String(((state.currentTimestamp - state.minTimestamp) / range) * 100);
+      }
+    }
+
+    // Time label
+    if (state.active) {
+      const d = new Date(state.currentTimestamp * 1000);
+      timeLabel.textContent = d.toLocaleTimeString("en-AU", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZone: "Australia/Melbourne",
+      });
+    }
+
     playBtn.textContent = state.playing ? "⏸" : "▶";
-  }
+  });
 
   async function enterPlayback(date: string): Promise<void> {
-    // Disconnect live WebSocket
     disconnect();
-    isPlaybackMode = true;
 
-    historyBtn.style.display = "none";
+    statusEl.style.display = "none";
     playbackEl.style.display = "flex";
 
     const ok = await loadDay(date);
@@ -116,18 +123,15 @@ export function initPlaybackUI(): void {
       return;
     }
 
-    // Start at the beginning
     seekTo(getPlaybackState().minTimestamp);
   }
 
   function exitPlayback(): void {
     stopPlayback();
-    isPlaybackMode = false;
 
     playbackEl.style.display = "none";
-    historyBtn.style.display = "block";
+    statusEl.style.display = "flex";
 
-    // Reconnect live WebSocket
     connect();
   }
 }
