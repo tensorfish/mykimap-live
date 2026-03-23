@@ -140,12 +140,18 @@ async function fetchRouteShape(tripId: string, routeId: string): Promise<void> {
 }
 
 
+/** Suppress automatic sounds during playback */
+let _playbackActive = false;
+export function setPlaybackActive(v: boolean): void { _playbackActive = v; }
+
 export function applyTick(worldState: WorldState): void {
-  // Detect new service alerts
-  const prevAlertCount = store.state.worldState?.alerts?.length ?? 0;
-  const newAlertCount = worldState.alerts?.length ?? 0;
-  if (newAlertCount > prevAlertCount) {
-    sounds.alert();
+  // Detect new service alerts (live mode only)
+  if (!_playbackActive) {
+    const prevAlertCount = store.state.worldState?.alerts?.length ?? 0;
+    const newAlertCount = worldState.alerts?.length ?? 0;
+    if (newAlertCount > prevAlertCount) {
+      sounds.alert();
+    }
   }
 
   store.setState((prev) => ({

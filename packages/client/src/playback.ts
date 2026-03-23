@@ -1,7 +1,7 @@
 import * as duckdb from "@duckdb/duckdb-wasm";
 import duckdb_wasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import duckdb_worker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
-import { applyTick } from "./store.js";
+import { applyTick, setPlaybackActive } from "./store.js";
 import { clearAnimations, recordHeatmapOnly, clearHeatmapTracker } from "./layers.js";
 import { showError } from "./error-modal.js";
 import type { WorldState, VehiclePosition } from "./types.js";
@@ -329,6 +329,7 @@ export async function loadDay(date: string): Promise<boolean> {
       currentTimestamp: allSnapshots[0]!.timestamp,
       speed: 1, playing: false,
     };
+    setPlaybackActive(true);
 
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
     const suffix = date === today ? " (updated every 5 min)" : "";
@@ -437,6 +438,7 @@ export function stopPlayback(): void {
   playback.active = false;
   playback.playing = false;
   playback.loading = false;
+  setPlaybackActive(false);
   allSnapshots = [];
   vehicleTimelines.clear();
   lastFedIdx = -1;
