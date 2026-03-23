@@ -47,18 +47,18 @@ export function initStatusBar(): void {
         counts[v.mode]++;
       }
 
-      const parts: string[] = [];
-      if (counts.metro > 0) parts.push(`🚆 ${counts.metro}`);
-      if (counts.tram > 0) parts.push(`🚊 ${counts.tram}`);
-      if (counts.bus > 0) parts.push(`🚌 ${counts.bus}`);
-      if (counts.vline > 0) parts.push(`🚂 ${counts.vline}`);
+      const segments: string[] = [];
+      if (counts.metro > 0) segments.push(`TRAIN ${counts.metro}`);
+      if (counts.tram > 0) segments.push(`TRAM ${counts.tram}`);
+      if (counts.bus > 0) segments.push(`BUS ${counts.bus}`);
+      if (counts.vline > 0) segments.push(`VLINE ${counts.vline}`);
 
-      // Last update
+      let text = segments.join(" · ");
       if (lastTickAt > 0) {
-        parts.push(`· ${timeAgo(lastTickAt)}`);
+        text += `  ·  ${timeAgo(lastTickAt)}`;
       }
 
-      info.textContent = parts.join("  ");
+      info.textContent = text;
     } else {
       info.textContent = "";
     }
