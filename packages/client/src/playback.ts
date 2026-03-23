@@ -218,6 +218,9 @@ export async function loadDay(date: string): Promise<boolean> {
       `SELECT * FROM '${date}.parquet' ORDER BY timestamp`
     );
 
+    // Total rows from Arrow metadata for progress reporting
+    const totalRows = result.batches.reduce((n, b) => n + b.numRows, 0);
+
     // Process Arrow batches — each batch is a chunk of rows
     const batches = result.batches;
     for (let bi = 0; bi < batches.length; bi++) {
@@ -254,7 +257,8 @@ export async function loadDay(date: string): Promise<boolean> {
       }
 
       // Progress + yield every batch
-      playback.loadingProgress = `Reading data... ${rowCount.toLocaleString()} rows`;
+      const pct = totalRows > 0 ? Math.floor((rowCount / totalRows) * 100) : 0;
+      playback.loadingProgress = `Reading data... ${pct}%`;
       notify();
       if (bi % 4 === 0) await new Promise((r) => setTimeout(r, 0));
     }
