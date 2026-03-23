@@ -2,6 +2,7 @@ import * as duckdb from "@duckdb/duckdb-wasm";
 import duckdb_wasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import duckdb_worker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
 import { applyTick } from "./store.js";
+import { clearAnimations } from "./layers.js";
 import type { WorldState, VehiclePosition } from "./types.js";
 
 let db: duckdb.AsyncDuckDB | null = null;
@@ -351,6 +352,7 @@ export function stopPlayback(): void {
   allSnapshots = [];
   vehicleTimelines.clear();
   lastFedIdx = -1;
+  clearAnimations();
   notify();
 }
 

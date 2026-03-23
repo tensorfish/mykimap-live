@@ -151,6 +151,12 @@ interface VehicleAnim {
 
 const anims = new Map<string, VehicleAnim>();
 
+/** Clear all animation state (used when switching playback dates) */
+export function clearAnimations(): void {
+  anims.clear();
+  snapCache.clear();
+}
+
 // ── Feed data ──
 
 export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {

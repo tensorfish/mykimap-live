@@ -122,6 +122,8 @@ export function initPlaybackUI(): void {
   });
 
   async function enterPlayback(date: string): Promise<void> {
+    // Stop any existing playback first (clears animation state)
+    stopPlayback();
     disconnect();
 
     statusEl.style.display = "none";
