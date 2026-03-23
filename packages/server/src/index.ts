@@ -257,7 +257,11 @@ function startServer(): void {
 
     async fetch(req, server) {
       const url = new URL(req.url);
-      const ip = server.requestIP(req)?.address ?? "unknown";
+      // Real client IP — check reverse proxy headers first
+      const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+        || req.headers.get("x-real-ip")
+        || server.requestIP(req)?.address
+        || "unknown";
 
       // CORS preflight
       if (req.method === "OPTIONS") {

@@ -29,6 +29,16 @@ bun run dev:server   # port 3000, hot reload
 bun run dev:client   # port 5173, HMR
 ```
 
+### Reverse proxy (Caddy)
+
+```
+mykimap.live {
+    reverse_proxy localhost:3000
+}
+```
+
+Caddy automatically adds `X-Forwarded-For` and `X-Real-Ip` headers. The server reads these to resolve the real client IP for rate limiting and WebSocket connection limits. No extra Caddy config needed — this works out of the box.
+
 ## Project structure
 
 | Package | What |

@@ -12,7 +12,9 @@ const ipConnections = new Map<string, number>();
 const MAX_CONNECTIONS_PER_IP = 5;
 
 function getIp(ws: ServerWebSocket<unknown>): string {
-  return (ws.remoteAddress || "unknown");
+  // Use the IP passed via upgrade data (resolved from X-Forwarded-For)
+  const data = ws.data as { ip?: string } | undefined;
+  return data?.ip || ws.remoteAddress || "unknown";
 }
 
 export function addClient(ws: ServerWebSocket<unknown>): boolean {
