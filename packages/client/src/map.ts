@@ -153,5 +153,12 @@ export function initMap(
   }
 
   requestAnimationFrame(renderFrame);
-  map.on("load", () => onReady());
+  map.on("load", () => {
+    const loadingEl = document.getElementById("map-loading");
+    if (loadingEl) {
+      loadingEl.classList.add("hidden");
+      setTimeout(() => loadingEl.remove(), 500);
+    }
+    onReady();
+  });
 }

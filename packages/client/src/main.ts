@@ -32,6 +32,19 @@ if (!MAPBOX_TOKEN) {
     connect();
   });
 
+  // ── Legend (first visit) ──
+  const legendEl = document.getElementById("legend")!;
+  const legendSeen = localStorage.getItem("mykimap-legend-seen");
+  if (legendSeen) {
+    legendEl.remove();
+  } else {
+    document.getElementById("legend-dismiss")!.addEventListener("click", () => {
+      legendEl.classList.add("hidden");
+      localStorage.setItem("mykimap-legend-seen", "1");
+      setTimeout(() => legendEl.remove(), 300);
+    });
+  }
+
   // ── Keyboard shortcuts ──
   document.addEventListener("keydown", (e) => {
     // Ignore when typing in an input

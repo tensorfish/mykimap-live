@@ -81,6 +81,8 @@ async function ensureCurrentDb(): Promise<void> {
   const today = melbourneDate();
   if (today !== currentDateStr) {
     await initDb(today);
+    // Reset so the first recording on the new day triggers an export
+    firstExportDone = false;
   }
 }
 
@@ -107,7 +109,9 @@ async function autoExportToday(): Promise<void> {
       const exportPath = join(config.recordingDataDir, `${today}.parquet`);
       const conn = db.connect();
       await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
-      log("debug", `Auto-exported today's Parquet: ${exportPath}`);
+      // Checkpoint WAL to prevent unbounded growth
+      await runAsync(conn, `CHECKPOINT`);
+      log("debug", `Auto-exported today's Parquet + checkpoint: ${exportPath}`);
     }
   } catch (error) {
     log("warn", `Auto Parquet export failed: ${error}`);

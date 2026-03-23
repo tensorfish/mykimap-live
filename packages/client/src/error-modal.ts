@@ -9,9 +9,18 @@ const detailsEl = () => document.getElementById("error-details")!;
 
 let lastErrorText = "";
 
+/** Sanitize file paths from stack traces for production */
+function sanitizeStack(stack: string): string {
+  // Remove absolute file paths, keep only relative paths and line numbers
+  return stack
+    .replace(/https?:\/\/[^/]+/g, "")
+    .replace(/\(?\/?[^\s()]*\/(node_modules|src)\//g, "$1/")
+    .replace(/\s+at\s+/g, "\n  at ");
+}
+
 export function showError(context: string, error: unknown): void {
   const msg = error instanceof Error ? error.message : String(error);
-  const stack = error instanceof Error ? error.stack ?? "" : "";
+  const stack = error instanceof Error ? sanitizeStack(error.stack ?? "") : "";
 
   const details = [
     `Context: ${context}`,
@@ -25,6 +34,7 @@ export function showError(context: string, error: unknown): void {
 
   lastErrorText = details;
 
+  // Show only the message to the user, not the full stack
   messageEl().textContent = `${context}: ${msg}`;
   detailsEl().textContent = details;
   overlay().classList.add("visible");

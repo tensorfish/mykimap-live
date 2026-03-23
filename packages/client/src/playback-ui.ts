@@ -148,15 +148,19 @@ export function initPlaybackUI(): void {
       }
     }
 
-    // Time label
+    // Time label + document title
     if (state.active) {
       const d = new Date(state.currentTimestamp * 1000);
-      timeLabel.textContent = d.toLocaleTimeString("en-AU", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
+      const time = d.toLocaleTimeString("en-AU", {
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
         timeZone: "Australia/Melbourne",
       });
+      timeLabel.textContent = time;
+      const dateLabel = d.toLocaleDateString("en-AU", {
+        day: "numeric", month: "short",
+        timeZone: "Australia/Melbourne",
+      });
+      document.title = `Myki Map - ${dateLabel} ${time}`;
     }
 
     playBtn.textContent = state.playing ? "⏸" : "▶";
@@ -179,6 +183,7 @@ export function initPlaybackUI(): void {
 
     statusEl.style.display = "none";
     playbackEl.style.display = "flex";
+    document.getElementById("vehicle-count")?.classList.add("hidden");
 
     const ok = await loadDay(date);
     if (!ok) {
@@ -193,6 +198,8 @@ export function initPlaybackUI(): void {
 
   function exitPlayback(): void {
     stopPlayback();
+    document.title = "Myki Map - Live";
+    document.getElementById("vehicle-count")?.classList.remove("hidden");
 
     playbackEl.style.display = "none";
     statusEl.style.display = "flex";

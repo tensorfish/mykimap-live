@@ -10,6 +10,7 @@
   </head>
   <body>
     <div id="map"></div>
+    <div id="map-loading">Loading map...</div>
 
     <div id="status">
       <span id="status-dot"></span>
@@ -88,6 +89,18 @@
     </div>
 
     <div id="vehicle-count"></div>
+
+    <div id="legend">
+      <div id="legend-title">Melbourne Public Transport</div>
+      <div id="legend-items">
+        <div class="legend-row"><span class="dot" style="background:#34ACE1"></span> Metro Trains</div>
+        <div class="legend-row"><span class="dot" style="background:#78BE20"></span> Trams</div>
+        <div class="legend-row"><span class="dot" style="background:#FF8200"></span> Buses</div>
+        <div class="legend-row"><span class="dot" style="background:#A57FB2"></span> V/Line</div>
+      </div>
+      <div id="legend-hint">Click any vehicle for details</div>
+      <button id="legend-dismiss">Got it</button>
+    </div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

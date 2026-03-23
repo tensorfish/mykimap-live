@@ -3,7 +3,7 @@ import { ServerStateMachine } from "./state-machine.js";
 import { loadProtoSchema } from "./poller/decoder.js";
 import { poll } from "./poller/index.js";
 import { processSnapshot, interpolate } from "./interpolation/index.js";
-import { addClient, removeClient, broadcast, clientCount } from "./broadcast/index.js";
+import { addClient, removeClient, broadcast, clientCount, closeAllClients } from "./broadcast/index.js";
 import { loadShapes, shapeStats, getShapeForTrip, getShapeForRoute } from "./shapes/index.js";
 import { initRecorder, recordSnapshot, closeRecorder, listRecordingDates, exportParquet } from "./recorder/index.js";
 import { recordCongestion, getCongestion } from "./congestion/index.js";
@@ -214,6 +214,40 @@ function broadcastCycle(): void {
   }
 }
 
+// ── Rate limiting ──
+
+/** Simple sliding-window rate limiter per IP */
+const RATE_WINDOW_MS = 60_000; // 1 minute
+const RATE_MAX_REQUESTS = 120;  // per window
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  let bucket = rateBuckets.get(ip);
+  if (!bucket || now > bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + RATE_WINDOW_MS };
+    rateBuckets.set(ip, bucket);
+  }
+  bucket.count++;
+  return bucket.count <= RATE_MAX_REQUESTS;
+}
+
+// Clean stale buckets every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, b] of rateBuckets) {
+    if (now > b.resetAt) rateBuckets.delete(ip);
+  }
+}, 5 * 60_000);
+
+/** CORS headers for all responses */
+function withCors(resp: Response): Response {
+  resp.headers.set("Access-Control-Allow-Origin", "*");
+  resp.headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
+  resp.headers.set("Access-Control-Allow-Headers", "Content-Type");
+  return resp;
+}
+
 // ── HTTP + WebSocket server ──
 
 function startServer(): void {
@@ -223,10 +257,23 @@ function startServer(): void {
 
     async fetch(req, server) {
       const url = new URL(req.url);
+      const ip = server.requestIP(req)?.address ?? "unknown";
+
+      // CORS preflight
+      if (req.method === "OPTIONS") {
+        return withCors(new Response(null, { status: 204 }));
+      }
+
+      // Rate limiting (skip static files and WebSocket)
+      if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/data/")) {
+        if (!checkRateLimit(ip)) {
+          return withCors(new Response("Too many requests", { status: 429 }));
+        }
+      }
 
       // WebSocket upgrade
       if (url.pathname === "/ws") {
-        const upgraded = server.upgrade(req);
+        const upgraded = server.upgrade(req, { data: { ip } });
         if (!upgraded) {
           return new Response("WebSocket upgrade failed", { status: 400 });
         }
@@ -235,36 +282,37 @@ function startServer(): void {
 
       // Health check
       if (url.pathname === "/health") {
-        return Response.json({
+        return withCors(Response.json({
           state: sm.state,
           vehicles: currentVehicles.length,
           alerts: currentAlerts.length,
           clients: clientCount(),
           lastPoll: lastPollTimestamp,
-        });
+        }));
       }
 
       // Snapshot listing
       if (url.pathname === "/data/snapshots") {
         const dates = listRecordingDates();
         log("debug", `Snapshot listing requested`, { dates });
-        return Response.json(dates);
+        return withCors(Response.json(dates));
       }
 
       // Snapshot Parquet export
       if (url.pathname.startsWith("/data/snapshots/")) {
         const dateStr = url.pathname.slice("/data/snapshots/".length);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-          return new Response("Invalid date format", { status: 400 });
+          return withCors(new Response("Invalid date format", { status: 400 }));
         }
         const parquetPath = await exportParquet(dateStr);
         if (!parquetPath) {
-          return new Response("Not found", { status: 404 });
+          return withCors(new Response("Not found", { status: 404 }));
         }
-        return new Response(Bun.file(parquetPath));
+        return withCors(new Response(Bun.file(parquetPath)));
       }
 
       // Route shape endpoint — returns full polyline with cumulative distances
+      // Cache-Control: shapes don't change within a day
       if (url.pathname.startsWith("/api/route-shape/")) {
         const tripId = decodeURIComponent(url.pathname.slice("/api/route-shape/".length));
         const routeId = url.searchParams.get("routeId") ?? "";
@@ -272,12 +320,16 @@ function startServer(): void {
         const shape = getShapeForTrip(tripId) ?? getShapeForRoute(routeId);
 
         if (!shape || shape.length === 0) {
-          return Response.json({ path: [], dists: [] });
+          const resp = Response.json({ path: [], dists: [] });
+          resp.headers.set("Cache-Control", "public, max-age=86400");
+          return withCors(resp);
         }
 
         const path = shape.map((p) => [p.lon, p.lat] as [number, number]);
-        const dists = shape.map((p) => p.dist); // cumulative meters
-        return Response.json({ path, dists });
+        const dists = shape.map((p) => p.dist);
+        const resp = Response.json({ path, dists });
+        resp.headers.set("Cache-Control", "public, max-age=86400");
+        return withCors(resp);
       }
 
       // Serve client static files in production
@@ -293,7 +345,11 @@ function startServer(): void {
 
     websocket: {
       open(ws) {
-        addClient(ws);
+        const accepted = addClient(ws);
+        if (!accepted) {
+          ws.close(1008, "Too many connections from this IP");
+          return;
+        }
 
         // Send backlog + congestion snapshot so the client has
         // initial 10-min heatmap data without waiting to accumulate.
@@ -326,6 +382,10 @@ function shutdown(): void {
 
   if (pollTimer) clearInterval(pollTimer);
   if (broadcastTimer) clearInterval(broadcastTimer);
+
+  // Notify connected clients before closing
+  closeAllClients(1001, "Server shutting down");
+
   closeRecorder().catch(() => {});
 
   sm.transition("STOPPED", "Cleanup complete", "system");
