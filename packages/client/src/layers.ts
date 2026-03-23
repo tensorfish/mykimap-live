@@ -175,6 +175,45 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
   }
 }
 
+/**
+ * Client-side snap: if a vehicle has no shapeDistTraveled (raw playback data),
+ * but we have its route shape cached, snap the lat/lon to the shape.
+ */
+function clientSnapToShape(v: VehiclePosition): number {
+  if (v.shapeDistTraveled >= 0) return v.shapeDistTraveled;
+
+  const shape = shapeCache.get(getShapeCacheKey(v));
+  if (!shape || shape.path.length < 2) return -1;
+
+  // Find the nearest point on the shape to the vehicle's lat/lon
+  let bestDist = Infinity;
+  let bestShapeDist = 0;
+
+  for (let i = 0; i < shape.path.length - 1; i++) {
+    const a = shape.path[i]!;
+    const b = shape.path[i + 1]!;
+
+    // Project point onto segment
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const lenSq = dx * dx + dy * dy;
+    const t = lenSq > 0
+      ? Math.max(0, Math.min(1, ((v.longitude - a[0]) * dx + (v.latitude - a[1]) * dy) / lenSq))
+      : 0;
+
+    const projLon = a[0] + t * dx;
+    const projLat = a[1] + t * dy;
+    const d = Math.sqrt((v.latitude - projLat) ** 2 + (v.longitude - projLon) ** 2);
+
+    if (d < bestDist) {
+      bestDist = d;
+      const segLen = shape.dists[i + 1]! - shape.dists[i]!;
+      bestShapeDist = shape.dists[i]! + t * segLen;
+    }
+  }
+
+  return bestShapeDist;
+}
+
 export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
   const now = Date.now();
   const seen = new Set<string>();
@@ -185,13 +224,16 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
     // Fetch route shape if not cached
     fetchAndCacheShape(v);
 
+    // Client-side snap for playback data (shapeDistTraveled === -1)
+    const shapeDist = clientSnapToShape(v);
+
     const shapeKey = getShapeCacheKey(v);
     const existing = anims.get(v.entityId);
 
-    if (existing && v.shapeDistTraveled >= 0) {
+    if (existing && shapeDist >= 0) {
       // Update target — vehicle moved to a new position on the shape
       const prevTarget = existing.targetDist;
-      const newTarget = v.shapeDistTraveled;
+      const newTarget = shapeDist;
 
       if (Math.abs(newTarget - prevTarget) > 0.5) {
         // Speed from snapshot timestamps (not wall clock — avoids
@@ -207,16 +249,16 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
         existing.lastUpdateAt = now;
         existing.lastSnapshotTs = v.timestamp;
       }
-    } else if (!existing && v.shapeDistTraveled >= 0) {
-      // New vehicle — use prevShapeDistTraveled to start behind and animate forward
-      const prevDist = v.prevShapeDistTraveled >= 0 ? v.prevShapeDistTraveled : v.shapeDistTraveled;
-      const dist = Math.abs(v.shapeDistTraveled - prevDist);
-      const inferredSpeed = v.speed > 0 ? v.speed : (dist > 0 ? dist / 30 : 0); // ~30s between polls
+    } else if (!existing && shapeDist >= 0) {
+      // New vehicle — start behind and animate forward
+      const prevDist = v.prevShapeDistTraveled >= 0 ? v.prevShapeDistTraveled : shapeDist;
+      const dist = Math.abs(shapeDist - prevDist);
+      const inferredSpeed = v.speed > 0 ? v.speed : (dist > 0 ? dist / 30 : 0);
 
-      const dir = v.shapeDistTraveled >= prevDist ? 1 : -1;
+      const dir = shapeDist >= prevDist ? 1 : -1;
       anims.set(v.entityId, {
         currentDist: prevDist,
-        targetDist: v.shapeDistTraveled,
+        targetDist: shapeDist,
         tailDist: prevDist - (TRAIL_LENGTH_M * dir),
         speed: inferredSpeed,
         direction: dir,
