@@ -361,16 +361,15 @@ async function main() {
 
   console.log(`Generating ${totalSnapshots} snapshots (${totalSeconds / 3600}h)...`);
 
-  const stmt = conn.prepare(
-    `INSERT INTO snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-
   let rowCount = 0;
+
+  function esc(s: string): string { return s.replace(/'/g, "''"); }
 
   for (let s = 0; s < totalSnapshots; s++) {
     const timestamp = baseTimestamp + s * SNAPSHOT_INTERVAL;
 
-    // Step all vehicles
+    // Build one batch INSERT per snapshot (~91 rows)
+    const values: string[] = [];
     for (const v of vehicles) {
       stepVehicle(v, SNAPSHOT_INTERVAL);
 
@@ -378,30 +377,19 @@ async function main() {
       const bearing = bearingAt(v.route.shape, v.shapeDist);
       const adjustedBearing = v.direction < 0 ? (bearing + 180) % 360 : bearing;
 
-      stmt.run(
-        timestamp,
-        v.entityId,
-        v.mode,
-        v.routeId,
-        v.vehicleId,
-        pos.lat,
-        pos.lon,
-        adjustedBearing,
-        v.speed,
-        false,
-        v.shapeDist
+      values.push(
+        `(${timestamp},'${esc(v.entityId)}','${esc(v.mode)}','${esc(v.routeId)}','${esc(v.vehicleId)}',${pos.lat},${pos.lon},${adjustedBearing},${v.speed},false,${v.shapeDist})`
       );
-
       rowCount++;
     }
+
+    conn.run(`INSERT INTO snapshots VALUES ${values.join(",")}`);
 
     if (s % 100 === 0) {
       const pct = Math.floor((s / totalSnapshots) * 100);
       process.stdout.write(`\r  ${pct}% (${s}/${totalSnapshots} snapshots, ${rowCount} rows)`);
     }
   }
-
-  stmt.finalize();
 
   console.log(`\r  100% — ${totalSnapshots} snapshots, ${rowCount} rows`);
 
