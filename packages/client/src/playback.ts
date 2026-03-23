@@ -73,8 +73,16 @@ export function advancePlayback(dtMs: number): void {
   }
 
   feedCurrentSnapshot();
-  notify();
+
+  // Throttle UI notifications to 10fps (slider update doesn't need 60fps)
+  const now = performance.now();
+  if (now - lastNotifyTime > 100) {
+    notify();
+    lastNotifyTime = now;
+  }
 }
+
+let lastNotifyTime = 0;
 
 /** Feed the snapshot at currentTimestamp into the live system (if it changed) */
 function feedCurrentSnapshot(): void {

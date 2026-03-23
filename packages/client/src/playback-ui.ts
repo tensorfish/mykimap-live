@@ -124,6 +124,8 @@ export function initPlaybackUI(): void {
       return;
     }
 
+    // Sync speed from the UI selector (HTML default may differ from state default)
+    setSpeed(parseInt(speedSelect.value, 10));
     seekTo(getPlaybackState().minTimestamp);
   }
 

@@ -94,10 +94,20 @@ function sliceShape(shape: CachedShape, fromDist: number, toDist: number): Array
   return result;
 }
 
+// Cache snap results to avoid re-computing for the same lat/lon
+const snapCache = new Map<string, { lat: number; lon: number; dist: number }>();
+
 function clientSnapToShape(v: VehiclePosition): number {
   if (v.shapeDistTraveled >= 0) return v.shapeDistTraveled;
   const shape = shapeCache.get(getShapeCacheKey(v));
   if (!shape || shape.path.length < 2) return -1;
+
+  // Check cache — skip expensive scan if position hasn't changed
+  const cached = snapCache.get(v.entityId);
+  if (cached && Math.abs(cached.lat - v.latitude) < 1e-7 && Math.abs(cached.lon - v.longitude) < 1e-7) {
+    return cached.dist;
+  }
+
   let bestDist = Infinity, bestShapeDist = 0;
   for (let i = 0; i < shape.path.length - 1; i++) {
     const a = shape.path[i]!, b = shape.path[i + 1]!;
@@ -111,6 +121,8 @@ function clientSnapToShape(v: VehiclePosition): number {
       bestShapeDist = shape.dists[i]! + t * (shape.dists[i + 1]! - shape.dists[i]!);
     }
   }
+
+  snapCache.set(v.entityId, { lat: v.latitude, lon: v.longitude, dist: bestShapeDist });
   return bestShapeDist;
 }
 
