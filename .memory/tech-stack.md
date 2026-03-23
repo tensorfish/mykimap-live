@@ -34,15 +34,17 @@ Bun workspaces manage all three from the root.
 | HTTP + WebSocket | Bun's built-in server (`Bun.serve`) | Native, fast, no extra deps. WebSocket support is first-class. |
 | GTFS Realtime decoding | `protobufjs` | GTFS-RT is a Protocol Buffer format. Decode 10 feeds per poll (~558 KB combined): 4 vehicle positions, 4 trip updates, 2 service alerts. |
 | Route shapes | Custom `shapes/` module | Downloads GTFS Schedule ZIP (~191 MB) on first boot, caches in `.cache/gtfs/`, extracts `shapes.txt` + `trips.txt` to build an in-memory `trip_id → shape polyline` index. Non-fatal if download fails — falls back to straight-line interpolation. |
-| Interpolation | Custom module | Between polls (every 7s), vehicles traverse from their previous known position (origin) to their latest known position (target) along the matched GTFS shape polyline. After reaching the target, they project forward using calculated speed. Falls back to straight-line lerp/projection when no shape is matched. |
+| Interpolation | Custom module | 30s delayed playback — interpolates between two known poll positions along the shape. No prediction. See [animation-architecture.md](animation-architecture.md). |
+| Recording | `recorder/` module | DuckDB records raw feed data on every fresh poll. Exports to Parquet for historical playback. Enabled by default. |
 | Shared clock | Server-authoritative tick | The server stamps every broadcast with a canonical timestamp. All clients animate from the same reference point, so multiple open windows show vehicles in the same place. |
 
 ### Data flow
 
-1. **Poll** — Every 7 seconds, fetch all 10 feeds in parallel (4 vehicle positions + 4 trip updates + 2 service alerts). Auth via `KeyID` header. ~558 KB per poll. Feed caches ~30s server-side so most polls return identical data — but we catch changes within 7s of them appearing.
-2. **Snapshot** — Decode protobuf. Snap each vehicle onto its GTFS route shape polyline (matched via `trip_id` → `shape_id` from static GTFS Schedule). Calculate speed from distance traveled along the shape. Merge trip updates and service alerts.
-3. **Interpolate** — Between polls, advance each vehicle along its shape polyline by `speed × dt`. Vehicles follow the actual road/track/tram line geometry — never cut through buildings. Falls back to straight-line projection for vehicles without a matched shape. Skip stale vehicles (per-vehicle timestamp > 120s old).
-4. **Broadcast** — Every ~1s, push the interpolated state to all connected clients over WebSocket.
+1. **Poll** — Every 15 seconds, fetch all 10 feeds in parallel. Auth via `KeyID` header. ~558 KB per poll. Feed caches ~30s server-side.
+2. **Record** — Raw feed data saved to DuckDB (`.data/snapshots/YYYY-MM-DD.duckdb` in Melbourne time) before processing.
+3. **Snapshot** — Decode protobuf. Snap each vehicle onto its GTFS route shape polyline (dual-direction per route). Calculate speed from shape distance delta.
+4. **Interpolate** — 30s delayed playback: interpolate between two known snapshots along the shape. Every broadcast position is between two ground-truth points — no prediction, no overshoot.
+5. **Broadcast** — Every ~1s, push interpolated state to all connected clients via WebSocket.
 
 ### Multi-client consistency
 
@@ -64,11 +66,16 @@ Every frontend receives the same broadcast at the same server tick. Clients don'
 
 ### Rendering approach
 
-- **No framework.** Vanilla TypeScript with direct DOM manipulation for UI, TanStack Store for reactivity, deck.gl pure JS API for the map layer.
-- **Arrows**: Vehicles are rendered as a deck.gl `IconLayer` with a canvas-generated arrow icon, rotated by `getAngle` to match bearing. White arrow tinted per-mode via `getColor`. Stale vehicles render dimmed gray.
-- **Trails**: A `PathLayer` renders underneath the arrows, drawing each vehicle's recent position history as a colored path. The store tracks the last 40 positions per vehicle. Trails use the same mode color at reduced opacity.
-- The store subscription triggers `deck.setProps()` with both layers whenever world state changes. The `IconLayer` uses deck.gl's built-in `transitions` on `getPosition` and `getAngle` for smooth 1s animation between server ticks.
-- **Mode colors**: blue (metro `[52,172,225]`), green (tram `[120,190,32]`), orange (bus `[255,130,0]`), purple (V/Line `[165,127,178]`).
+See [animation-architecture.md](animation-architecture.md) for the full animation system.
+
+- **No framework.** Vanilla TypeScript, TanStack Store, deck.gl pure JS API.
+- **Single render loop** at 60fps — handles both live and playback, no duplicate animation code.
+- **Route-based animation** — each vehicle animates along its cached GTFS route shape. Position, bearing, and trail are all sampled from the shape geometry.
+- **Arrows**: deck.gl `IconLayer` with canvas-generated arrow icon. Bearing from shape direction at current position.
+- **Trails**: deck.gl `PathLayer` — 800m slice of the route shape behind the arrow. Trail tail follows the arrow; "eats itself" when the arrow stops.
+- **Client-side shape snapping** — for playback data (raw GPS with no `shapeDistTraveled`), the client snaps lat/lon to the cached route shape.
+- **Speed multiplier** — one function controls animation speed: live=1, playback=speed, paused=0.
+- **Mode colors**: blue (metro), green (tram), orange (bus), purple (V/Line).
 - **Arrow sizes** (pixels): metro 28, tram 22, bus 14, V/Line 28.
 
 ## Docs (`docs/`)
@@ -89,11 +96,13 @@ Every frontend receives the same broadcast at the same server tick. Clients don'
 | `@tanstack/store` | client | Reactive state — drives layer updates and UI |
 | `vite` | client | Dev server and bundler |
 | `vitepress` | docs | Documentation site |
+| `duckdb` | server | Record raw feed snapshots, export to Parquet |
+| `@duckdb/duckdb-wasm` | client | Load and query Parquet for historical playback |
 
 ## What's intentionally absent
 
-- **No database — for now.** Live vehicle state is ephemeral in-memory. Future: DuckDB on both sides — server writes snapshots to daily `.duckdb` files, exports to Parquet; client loads Parquet with DuckDB-WASM for historical playback. See [future-time-machine.md](future-time-machine.md).
-- **No REST API — for now.** All live client-server communication is WebSocket. Future: `GET /data/snapshots/:date` serves Parquet exports, `GET /data/snapshots` lists available dates.
+- **DuckDB on both sides.** Server records raw feed data to daily `.duckdb` files (enabled by default). Client loads Parquet exports via DuckDB-WASM for historical playback.
+- **REST endpoints** for playback: `GET /data/snapshots` lists dates, `GET /data/snapshots/:date` exports Parquet, `GET /api/route-shape/:tripId` returns route geometry.
 - **No authentication.** This is a public visualisation tool.
 - **No UI framework.** Vanilla TS + TanStack Store + direct DOM. No React, no virtual DOM.
 

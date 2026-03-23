@@ -97,20 +97,31 @@ stateDiagram-v2
     DISCONNECTED --> CONNECTING
 ```
 
-## Future: time machine
+## Time machine (implemented)
 
-DuckDB on both sides. Server writes, client reads.
+DuckDB on both sides. Server records raw feed data, client plays it back.
 
-**Server:** After each `processSnapshot()`, batch-insert the enriched snapshot into a local DuckDB database (`.data/snapshots/YYYY-MM-DD.duckdb`). One file per day, auto-rotated. `GET /data/snapshots/:date` exports to Parquet.
+**Server:** Before `processSnapshot()`, batch-inserts raw GTFS-RT data into DuckDB (`.data/snapshots/YYYY-MM-DD.duckdb`, Melbourne time). `GET /data/snapshots/:date` exports to Parquet.
 
-**Client:** DuckDB-WASM loads the Parquet file in the browser. A time slider queries by timestamp and feeds results into the same `applyTick()` → store → layers pipeline. The rendering code doesn't know or care whether data is live or historical.
+**Client:** DuckDB-WASM loads the Parquet file into memory. All snapshots parsed into a sorted array. During playback, `advancePlayback()` feeds snapshots into `applyTick()` as the timestamp crosses them. `clientSnapToShape()` snaps raw GPS positions to cached route shapes. The same `feedTick` → `computeFrame` pipeline handles animation, trails, and bearing — identical to live mode.
 
-**Invariants that make this possible:**
-- `WorldState` is the single interchange format (live and playback produce the same shape)
-- `applyTick()` accepts any `WorldState` regardless of source
-- `PollResult` is serializable (can be inserted into DuckDB)
+**Single animation pipeline:**
 
-See `.memory/future-time-machine.md` for the full design.
+```mermaid
+flowchart LR
+    subgraph SOURCES["Data Sources"]
+        LIVE["WebSocket tick"]
+        PLAY["Playback snapshot"]
+    end
+    SOURCES --> AT["applyTick()"]
+    AT --> STORE["TanStack Store"]
+    STORE --> FT["feedTick()"]
+    FT --> SNAP["clientSnapToShape()"]
+    SNAP --> CF["computeFrame(dtMs × speed)"]
+    CF --> RENDER["deck.gl render"]
+```
+
+One render loop. One speed multiplier. Zero duplicate animation code.
 
 ## Key timing constants
 

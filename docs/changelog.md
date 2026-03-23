@@ -2,26 +2,41 @@
 
 ## [Unreleased]
 
-### Changed
-- Poll interval: 30s → 7s (catches feed changes faster; most polls return identical data due to ~30s server-side cache)
-- Interpolation: vehicles now traverse from origin → target along their GTFS route shape polyline between polls. No teleporting, no building-cutting. Falls back to straight-line for unmatched vehicles.
-- Vehicles render as **directional arrows** (IconLayer) rotated to match bearing, not dots
-- Added **snail trails** (PathLayer) behind each moving vehicle showing last 40 positions
-- Mode colors: blue (metro), green (tram), orange (bus), purple (V/Line)
-- Simplified state-transitions documentation (242 → 109 lines)
+### Architecture
+- **Single animation pipeline** — live and playback share the same `feedTick` → `computeFrame` → render chain. No duplicate animation code.
+- **Route-based animation** — vehicles animate along cached GTFS route shapes. Position, bearing, and trail all derived from shape geometry.
+- **30s delayed playback** — server interpolates between two known poll positions. No prediction, no overshoot.
+- **Client-side shape snapping** — playback data (raw GPS) is snapped to route shapes on the client, enabling the same animation as live data.
+- **Single render loop** — one `requestAnimationFrame` loop handles live and playback. Speed multiplier controls pace (1×=live, 10-360×=playback, 0=paused).
 
-### Added
-- Project scaffolding: Bun monorepo with `packages/server`, `packages/client`, `docs/`
-- Server: GTFS-RT feed polling (10 feeds), protobuf decoding, WebSocket broadcast
-- Server: GTFS Schedule shape loader — downloads 191 MB ZIP on first boot, caches in `.cache/gtfs/`, builds `trip_id → shape polyline` index
-- Server: Route-snapped interpolation — vehicles follow actual road/track/tram geometry
-- Server: State machine with transition logging
-- Client: Mapbox GL JS dark base map with deck.gl overlay (no framework, vanilla TS)
-- Client: TanStack Store for reactive state
-- Client: WebSocket with auto-reconnect and exponential backoff
-- Client: Status bar showing connection state, vehicle count, alert count
-- Docs: VitePress site with Mermaid diagrams
-- `.memory/`: GTFS-RT feed analysis, implementation plan
-- `AGENTS.md`: AI agent instructions
-- `.memory/future-time-machine.md`: Time machine design — Parquet snapshots + DuckDB-WASM playback
-- Architectural seams preserved for future playback: `WorldState` as single interchange format, `applyTick()` source-agnostic, `PollResult` serializable
+### Features
+- **Time machine** — DuckDB records raw feed data. DuckDB-WASM loads Parquet in the browser. Date picker, time slider, speed control (1×/10×/60×/360×).
+- **Vehicle selection** — click an arrow to see route info, speed, class (trams), alerts. Full route shape highlighted on map.
+- **Mode filters** — toggle Trains/Trams/Buses/V/Line with vehicle counts.
+- **Animated trails** — 800m trail follows each arrow along the route. "Eats itself" when the arrow stops.
+- **Mobile-friendly** — responsive layout, touch-friendly controls.
+- **Instant movement on load** — arrows start at oldest backlog position and animate forward.
+- **History button** — inline with Live status, loads DuckDB playback with download progress.
+
+### Server
+- Poll interval: 15s (against ~30s feed cache)
+- 30s delayed playback interpolation between known snapshots
+- DuckDB recording enabled by default (`.data/snapshots/YYYY-MM-DD.duckdb`, Melbourne time)
+- Raw feed data recorded before processing (faithful copy of API)
+- Dual-direction shape storage per route (dir0 + dir1)
+- Parquet export endpoint with WAL-aware active DB connection
+- Route shape endpoint with cumulative distances
+
+### Client
+- Route-based animation: arrows move along cached GTFS shapes
+- Client-side shape snapping for playback data
+- Bearing from shape geometry (sample behind + current position)
+- Trail = 800m slice of route shape behind the arrow
+- DuckDB-WASM loads full day into memory for smooth playback
+- Single `requestAnimationFrame` loop for live + playback
+- Speed multiplier: live=1, playing=speed, paused=0
+
+### Tools
+- `packages/tools/generate-snapshot.ts` — generate synthetic test data matching real API format
+- Vehicles traverse real Melbourne route geometry with dwell at terminus
+- `bun run generate-snapshot -- --date 2026-03-22 --vehicles 30`
