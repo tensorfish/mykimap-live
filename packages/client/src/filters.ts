@@ -1,63 +1,76 @@
-import { store, setFilter, setAdvancedFilter } from "./store.js";
+import { store, setFilter, setRouteFilter, setVehicleFilter } from "./store.js";
 import type { Filters } from "./store.js";
 import type { TransportMode } from "./types.js";
 
 export function initFilters(): void {
   const chips = document.querySelectorAll<HTMLElement>(".filter-chip[data-filter]");
-  const advancedCheck = document.getElementById("advanced-check")! as HTMLInputElement;
-  const advancedRow = document.getElementById("advanced-row")!;
-  const advancedInput = document.getElementById("advanced-input")! as HTMLInputElement;
-  const advancedCount = document.getElementById("advanced-count")!;
+  const expandBtn = document.getElementById("filter-expand")!;
+  const filterRow = document.getElementById("filter-row")!;
+  const routeInput = document.getElementById("filter-route")! as HTMLInputElement;
+  const vehicleInput = document.getElementById("filter-vehicle")! as HTMLInputElement;
+  const filterCount = document.getElementById("filter-count")!;
+
+  let expanded = false;
 
   // Mode chip toggles
   for (const chip of chips) {
     chip.addEventListener("click", () => {
       const key = chip.dataset.filter as keyof Filters;
-      const current = store.state.filters[key];
-      setFilter(key, !current);
+      setFilter(key, !store.state.filters[key]);
     });
   }
 
-  // Advanced toggle
-  advancedCheck.addEventListener("change", () => {
-    advancedRow.style.display = advancedCheck.checked ? "flex" : "none";
-    if (!advancedCheck.checked) {
-      advancedInput.value = "";
-      setAdvancedFilter("");
+  // Expand/collapse
+  expandBtn.addEventListener("click", () => {
+    expanded = !expanded;
+    filterRow.style.display = expanded ? "flex" : "none";
+    expandBtn.classList.toggle("open", expanded);
+    if (expanded) {
+      routeInput.focus();
     } else {
-      advancedInput.focus();
+      routeInput.value = "";
+      vehicleInput.value = "";
+      setRouteFilter("");
+      setVehicleFilter("");
     }
   });
 
-  // Advanced text input — filter as you type
-  advancedInput.addEventListener("input", () => {
-    setAdvancedFilter(advancedInput.value);
-  });
+  // Text inputs
+  routeInput.addEventListener("input", () => setRouteFilter(routeInput.value));
+  vehicleInput.addEventListener("input", () => setVehicleFilter(vehicleInput.value));
 
-  // Clear on Escape
-  advancedInput.addEventListener("keydown", (e) => {
+  // Escape clears
+  const onEsc = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
-      advancedInput.value = "";
-      setAdvancedFilter("");
+      (e.target as HTMLInputElement).value = "";
+      setRouteFilter(routeInput.value);
+      setVehicleFilter(vehicleInput.value);
     }
-  });
+  };
+  routeInput.addEventListener("keydown", onEsc);
+  vehicleInput.addEventListener("keydown", onEsc);
 
-  // Sync UI with store
+  // Sync UI
   store.subscribe(() => {
-    const { filters, worldState, advancedFilter } = store.state;
+    const { filters, worldState, routeFilter, vehicleFilter } = store.state;
 
     const counts: Record<TransportMode, number> = { metro: 0, tram: 0, bus: 0, vline: 0 };
     let matchCount = 0;
+    let total = 0;
+
+    const rq = routeFilter.toLowerCase();
+    const vq = vehicleFilter.toLowerCase();
+    const hasFilter = rq.length > 0 || vq.length > 0;
 
     if (worldState) {
-      const query = advancedFilter.toLowerCase();
-
       for (const v of worldState.vehicles) {
         counts[v.mode]++;
-
-        if (query && filters[v.mode]) {
-          if (matchesFilter(v.routeId, v.vehicleId, v.vehicleLabel, v.entityId, query)) {
-            matchCount++;
+        if (filters[v.mode]) {
+          total++;
+          if (hasFilter) {
+            const routeMatch = !rq || v.routeId.toLowerCase().includes(rq) || v.entityId.toLowerCase().includes(rq);
+            const vehicleMatch = !vq || v.vehicleId.toLowerCase().includes(vq) || v.vehicleLabel.toLowerCase().includes(vq);
+            if (routeMatch && vehicleMatch) matchCount++;
           }
         }
       }
@@ -66,27 +79,12 @@ export function initFilters(): void {
     for (const chip of chips) {
       const key = chip.dataset.filter as keyof Filters;
       chip.classList.toggle("off", !filters[key]);
-
       const countEl = chip.querySelector(".chip-count");
       if (countEl && key in counts) {
         countEl.textContent = String(counts[key as TransportMode]);
       }
     }
 
-    // Update match count
-    if (advancedFilter) {
-      const total = Object.values(counts).reduce((a, b) => a + b, 0);
-      advancedCount.textContent = `${matchCount} / ${total}`;
-    } else {
-      advancedCount.textContent = "";
-    }
+    filterCount.textContent = hasFilter ? `${matchCount} / ${total}` : "";
   });
-}
-
-/** Case-insensitive substring match across route ID, vehicle ID, label, entity ID */
-function matchesFilter(routeId: string, vehicleId: string, label: string, entityId: string, query: string): boolean {
-  return routeId.toLowerCase().includes(query)
-    || vehicleId.toLowerCase().includes(query)
-    || label.toLowerCase().includes(query)
-    || entityId.toLowerCase().includes(query);
 }

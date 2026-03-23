@@ -18,8 +18,8 @@ export interface AppState {
   selectedEntityId: string | null;
   routeShape: Array<[number, number]> | null;
   filters: Filters;
-  /** Advanced text filter — fuzzy substring match on route/vehicle ID */
-  advancedFilter: string;
+  routeFilter: string;
+  vehicleFilter: string;
 }
 
 export const store = new Store<AppState>({
@@ -29,7 +29,8 @@ export const store = new Store<AppState>({
   selectedEntityId: null,
   routeShape: null,
   filters: { metro: true, tram: true, bus: true, vline: true },
-  advancedFilter: "",
+  routeFilter: "",
+  vehicleFilter: "",
 });
 
 // ── Derived selectors ──
@@ -54,8 +55,12 @@ export function getFilters(): Filters {
   return store.state.filters;
 }
 
-export function getAdvancedFilter(): string {
-  return store.state.advancedFilter;
+export function getRouteFilter(): string {
+  return store.state.routeFilter;
+}
+
+export function getVehicleFilter(): string {
+  return store.state.vehicleFilter;
 }
 
 export function setFilter(key: keyof Filters, value: boolean): void {
@@ -65,11 +70,12 @@ export function setFilter(key: keyof Filters, value: boolean): void {
   }));
 }
 
-export function setAdvancedFilter(text: string): void {
-  store.setState((prev) => ({
-    ...prev,
-    advancedFilter: text,
-  }));
+export function setRouteFilter(text: string): void {
+  store.setState((prev) => ({ ...prev, routeFilter: text }));
+}
+
+export function setVehicleFilter(text: string): void {
+  store.setState((prev) => ({ ...prev, vehicleFilter: text }));
 }
 
 // ── Actions ──
