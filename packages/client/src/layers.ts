@@ -139,7 +139,7 @@ function clientSnapToShape(v: VehiclePosition): number {
 
   // If local search found a close match (< ~50m in degrees), use it.
   // Otherwise fall back to full scan.
-  if (bestDist > 0.0005) {
+  if (bestDist > SNAP_CLOSE_THRESHOLD) {
     for (let i = 0; i < n; i++) {
       if (i >= lo && i < hi) continue; // already searched
       const { d, shapeDist } = snapToSegment(shape, i, v.latitude, v.longitude);
@@ -161,8 +161,12 @@ function clientSnapToShape(v: VehiclePosition): number {
 // - Trail = shape slice from tailDist to currentDist
 
 const TRAIL_LENGTH_M = 800;
-const TRAIL_FADE_SPEED = 30; // m/s when stopped — 800m trail fades in ~27s
-const ANIM_SPEED_MS = 15; // m/s default animation speed
+const TRAIL_FADE_SPEED = 30;       // m/s when stopped — 800m trail fades in ~27s
+const ANIM_SPEED_MS = 15;          // m/s default animation speed
+const MIN_MOVE_THRESHOLD_M = 0.5;  // min dist change to register as movement
+const MIN_SPEED_DIST_M = 1;        // min dist change to compute speed
+const SNAP_CLOSE_THRESHOLD = 0.0005; // ~50m in degrees — local snap result is good enough
+const TARGET_REACHED_M = 0.5;      // distance to consider target reached
 
 // ── Congestion heatmap ──
 //
@@ -192,6 +196,9 @@ interface RouteHeatmap {
 }
 
 const heatmapData = new Map<string, RouteHeatmap>();
+let heatmapDirty = true;
+let cachedHeatmapLayer: PathLayer | null = null;
+let cachedHeatmapTs = 0;
 
 /** Mode baseline speeds (m/s) for color normalization */
 const MODE_BASELINE_SPEED: Record<TransportMode, number> = {
@@ -208,6 +215,7 @@ const MODE_BASELINE_SPEED: Record<TransportMode, number> = {
  */
 export function seedHeatmap(congestion: SegmentSpeed[], nowTs: number): void {
   heatmapData.clear();
+  heatmapDirty = true;
   for (const seg of congestion) {
     let route = heatmapData.get(seg.routeId);
     if (!route) {
@@ -249,6 +257,7 @@ function recordSegmentSpeed(routeId: string, mode: TransportMode, prevDist: numb
     buf.push({ ts: vehicleTs, speed });
     if (buf.length > HEATMAP_MAX_SAMPLES) buf.shift();
   }
+  heatmapDirty = true;
 }
 
 /** Get average speed for a segment within the sliding window */
@@ -290,7 +299,7 @@ export function recordHeatmapOnly(vehicles: VehiclePosition[]): void {
       const moveDist = Math.abs(dist - prev.dist);
       const dt = Math.abs(v.timestamp - prev.ts);
 
-      if (v.timestamp !== prev.ts && dt > 0 && moveDist > 1) {
+      if (v.timestamp !== prev.ts && dt > 0 && moveDist > MIN_SPEED_DIST_M) {
         const speed = moveDist / dt;
         recordSegmentSpeed(key, v.mode, prev.dist, dist, speed, v.timestamp);
       }
@@ -348,7 +357,7 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
       }
       // Only add if position actually changed
       const lastDist = entry.dists[entry.dists.length - 1];
-      if (lastDist === undefined || Math.abs(dist - lastDist) > 0.5) {
+      if (lastDist === undefined || Math.abs(dist - lastDist) > MIN_MOVE_THRESHOLD_M) {
         entry.dists.push(dist);
       }
       entry.v = v; // keep latest vehicle data
@@ -390,10 +399,10 @@ export function feedTick(vehicles: VehiclePosition[]): void {
       const moveDist = Math.abs(dist - lastTarget);
       const snapDt = existing.lastTs > 0 ? Math.abs(v.timestamp - existing.lastTs) : 30;
 
-      if (moveDist > 0.5) {
+      if (moveDist > MIN_MOVE_THRESHOLD_M) {
         existing.targets.push(dist);
 
-        if (snapDt > 0 && moveDist > 1) {
+        if (snapDt > 0 && moveDist > MIN_SPEED_DIST_M) {
           existing.speed = moveDist / snapDt;
         }
       }
@@ -471,7 +480,7 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
         anim.currentDist = Math.max(anim.currentDist - advance, target);
       }
 
-      if (Math.abs(anim.currentDist - target) < 0.5) {
+      if (Math.abs(anim.currentDist - target) < TARGET_REACHED_M) {
         anim.currentDist = target;
         anim.targets.shift();
       }
@@ -616,6 +625,13 @@ export function createTrailLayer(vehicles: VehiclePosition[], selectedId: string
  * Seeded by server on connect, then maintained by feedTick.
  */
 export function createHeatmapLayer(nowTs: number): PathLayer {
+  // Return cached layer if data hasn't changed (avoid O(routes×segments) every frame)
+  if (!heatmapDirty && cachedHeatmapLayer && nowTs === cachedHeatmapTs) {
+    return cachedHeatmapLayer;
+  }
+  heatmapDirty = false;
+  cachedHeatmapTs = nowTs;
+
   const cutoff = nowTs - HEATMAP_WINDOW_S;
 
   interface HeatSegment {
@@ -658,7 +674,7 @@ export function createHeatmapLayer(nowTs: number): PathLayer {
     }
   }
 
-  return new PathLayer({
+  cachedHeatmapLayer = new PathLayer({
     id: "heatmap",
     data: segments,
     getPath: (d: HeatSegment) => d.path,
@@ -671,6 +687,7 @@ export function createHeatmapLayer(nowTs: number): PathLayer {
     jointRounded: true,
     pickable: false,
   });
+  return cachedHeatmapLayer;
 }
 
 export function createRouteShapeLayer(routeShape: Array<[number, number]> | null, mode: TransportMode | null) {
