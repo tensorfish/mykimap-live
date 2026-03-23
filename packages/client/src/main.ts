@@ -3,7 +3,7 @@ import { initMap } from "./map.js";
 import { initStatusBar } from "./ui.js";
 import { initPanel } from "./panel.js";
 import { initFilters } from "./filters.js";
-import { initPlaybackUI } from "./playback-ui.js";
+import { initPlaybackUI, type PlaybackUIControls } from "./playback-ui.js";
 import { connect } from "./ws.js";
 import { transition, selectVehicle, getSelectedEntityId } from "./store.js";
 import { getPlaybackState, play, pause, seekTo } from "./playback.js";
@@ -26,11 +26,39 @@ if (!MAPBOX_TOKEN) {
   initStatusBar();
   initPanel();
   initFilters();
-  initPlaybackUI();
+  const playbackUI = initPlaybackUI();
 
   initMap(container, MAPBOX_TOKEN, () => {
     transition("CONNECTING", "Map loaded");
-    connect();
+
+    // Check for /replay/:date/:time URL — auto-enter playback
+    const replayMatch = window.location.pathname.match(
+      /^\/replay\/(\d{4}-\d{2}-\d{2})(?:\/(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+    );
+    if (replayMatch) {
+      const date = replayMatch[1]!;
+      let startTs: number | undefined;
+      if (replayMatch[2] && replayMatch[3]) {
+        // Convert HH:MM:SS Melbourne time to POSIX timestamp.
+        // Use Intl to resolve the correct UTC offset for that date
+        // (handles AEST +10 vs AEDT +11 automatically).
+        const hour = parseInt(replayMatch[2], 10);
+        const minute = parseInt(replayMatch[3], 10);
+        const second = replayMatch[4] ? parseInt(replayMatch[4], 10) : 0;
+        const utcGuess = new Date(`${date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}Z`);
+        const melbHour = parseInt(utcGuess.toLocaleString("en-AU", { hour: "numeric", hour12: false, timeZone: "Australia/Melbourne" }), 10);
+        const offsetH = melbHour - utcGuess.getUTCHours();
+        utcGuess.setHours(utcGuess.getUTCHours() - offsetH + hour);
+        utcGuess.setMinutes(minute);
+        utcGuess.setSeconds(second);
+        startTs = Math.floor(utcGuess.getTime() / 1000);
+      }
+      playbackUI.enterPlayback(date, startTs).then(() => {
+        play();
+      });
+    } else {
+      connect();
+    }
   });
 
   // ── Legend (first visit) ──

@@ -376,6 +376,11 @@ function startServer(): void {
         return new Response(file);
       }
 
+      // SPA fallback: /replay/* routes are handled client-side
+      if (url.pathname.startsWith("/replay/")) {
+        return new Response(Bun.file(clientDist + "/index.html"));
+      }
+
       return new Response("Not found", { status: 404 });
     },
 

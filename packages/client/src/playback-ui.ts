@@ -14,7 +14,11 @@ import {
 import { connect, disconnect } from "./ws.js";
 import { sounds } from "./audio.js";
 
-export function initPlaybackUI(): void {
+export interface PlaybackUIControls {
+  enterPlayback: (date: string, startTimestamp?: number) => Promise<void>;
+}
+
+export function initPlaybackUI(): PlaybackUIControls {
   const historyBtn = document.getElementById("history-btn")!;
   const statusEl = document.getElementById("status")!;
   const playbackEl = document.getElementById("playback")!;
@@ -167,7 +171,7 @@ export function initPlaybackUI(): void {
     // Buffer bar — show loaded ranges as segments on the slider
     updateBufferBar(state);
 
-    // Time label + document title
+    // Time label + document title + shareable URL
     if (state.active) {
       const d = new Date(state.currentTimestamp * 1000);
       const time = d.toLocaleTimeString("en-AU", {
@@ -180,6 +184,16 @@ export function initPlaybackUI(): void {
         timeZone: "Australia/Melbourne",
       });
       document.title = `Myki Map - ${dateLabel} ${time}`;
+
+      // Update URL to shareable replay link
+      const hhmmss = d.toLocaleTimeString("en-AU", {
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+        timeZone: "Australia/Melbourne",
+      });
+      const replayPath = `/replay/${state.date}/${hhmmss}`;
+      if (window.location.pathname !== replayPath) {
+        history.replaceState(null, "", replayPath);
+      }
     }
 
     playBtn.textContent = state.playing ? "⏸" : "▶";
@@ -205,7 +219,7 @@ export function initPlaybackUI(): void {
     bufferBarInner.innerHTML = html;
   }
 
-  async function enterPlayback(date: string): Promise<void> {
+  async function enterPlayback(date: string, startTimestamp?: number): Promise<void> {
     // Stop any existing playback first
     stopPlayback();
     disconnect();
@@ -221,12 +235,17 @@ export function initPlaybackUI(): void {
       return;
     }
 
+    // Update date picker to reflect the loaded date
+    dateSelect.value = date;
+
     // Sync speed from the UI selector
     setSpeed(parseInt(speedSelect.value, 10));
 
-    // Step 2: Load the first chunk in the background
-    // The user can see the slider and time range already
-    await loadInitialChunk(meta.minTimestamp);
+    // Step 2: Load the chunk containing the start time
+    const ts = startTimestamp
+      ? Math.max(meta.minTimestamp, Math.min(startTimestamp, meta.maxTimestamp))
+      : meta.minTimestamp;
+    await loadInitialChunk(ts);
   }
 
   function exitPlayback(): void {
@@ -235,9 +254,16 @@ export function initPlaybackUI(): void {
     document.title = "Myki Map - Live Melbourne Transport";
     document.getElementById("vehicle-count")?.classList.remove("hidden");
 
+    // Clean replay URL — go back to root without reload
+    if (window.location.pathname !== "/") {
+      history.replaceState(null, "", "/");
+    }
+
     playbackEl.style.display = "none";
     statusEl.style.display = "flex";
 
     connect();
   }
+
+  return { enterPlayback };
 }

@@ -13,6 +13,7 @@
 ### Features
 - **Time machine** — DuckDB records raw feed data. DuckDB-WASM streams Parquet chunks in the browser. Date picker, time slider, speed control (1×/10×/60×/360×).
 - **Streaming playback** — click History, pick a date, slider is interactive in <2s (metadata only). Press play, first chunk loads in seconds. Prefetches ahead. No full-day download required.
+- **Shareable replay URLs** — `mykimap.live/replay/2026-03-23/08:00` opens directly into playback at that moment. URL updates as playback advances. Copy at any point to share.
 - **Buffer bar** — YouTube-style loaded-range indicator on the time slider.
 - **Vehicle selection** — click an arrow to see route info, speed, class (trams), alerts. Full route shape highlighted on map.
 - **Mode filters** — toggle Trains/Trams/Buses/V/Line with vehicle counts.

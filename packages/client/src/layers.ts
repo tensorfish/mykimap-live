@@ -333,7 +333,10 @@ const anims = new Map<string, VehicleAnim>();
 /** Clear all animation and snap state. Called on playback date switch and seek. */
 export function clearAnimations(): void {
   anims.clear();
-  snapCache.clear();
+  // NOTE: snapCache is intentionally preserved across seeks.
+  // It caches entityId → shapeDist projections. Clearing it forces
+  // expensive full-scan recomputation for ~3,500 vehicles.
+  // The cache auto-updates when vehicle positions change.
 }
 
 // ── Feed data ──
