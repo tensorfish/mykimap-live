@@ -1,0 +1,17 @@
+{
+  "name": "tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate-snapshot": "bun run src/generate-snapshot.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "duckdb": "^1.4.0",
+    "protobufjs": "^7.4.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
