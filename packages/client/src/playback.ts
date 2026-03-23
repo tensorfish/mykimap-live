@@ -194,9 +194,9 @@ export async function loadDay(date: string): Promise<boolean> {
     notify();
     return true;
   } catch (error) {
-    console.error("[playback] Failed:", error);
+    console.error("[playback] Failed to load day:", error);
     playback.loading = false;
-    playback.loadingProgress = "";
+    playback.loadingProgress = `Error: ${error}`;
     notify();
     return false;
   }

@@ -118,8 +118,9 @@ export function initPlaybackUI(): void {
 
     const ok = await loadDay(date);
     if (!ok) {
-      alert(`Failed to load recording for ${date}`);
-      exitPlayback();
+      // Show error in the time label instead of alert()
+      // The error details are in the browser console
+      timeLabel.textContent = `Failed to load ${date} — check console`;
       return;
     }
 
