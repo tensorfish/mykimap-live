@@ -56,10 +56,10 @@ export function initStatusBar(): void {
 
 function timeAgo(timestampMs: number): string {
   const seconds = Math.floor((Date.now() - timestampMs) / 1000);
-  if (seconds < 2) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 60) return `updated ${seconds} second${seconds !== 1 ? "s" : ""} ago`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return `updated ${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m ago`;
+  const remMin = minutes % 60;
+  return `updated ${hours} hour${hours !== 1 ? "s" : ""} ${remMin} minute${remMin !== 1 ? "s" : ""} ago`;
 }
