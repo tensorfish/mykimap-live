@@ -148,9 +148,7 @@ export function initPlaybackUI(): void {
 
     const ok = await loadDay(date);
     if (!ok) {
-      // Show error in the time label instead of alert()
-      // The error details are in the browser console
-      timeLabel.textContent = `Failed to load ${date} — check console`;
+      exitPlayback();
       return;
     }
 

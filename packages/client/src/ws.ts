@@ -1,4 +1,5 @@
 import { transition, applyTick } from "./store.js";
+import { showError } from "./error-modal.js";
 import type { WorldState } from "./types.js";
 
 const STALE_THRESHOLD_MS = 5_000;
@@ -65,8 +66,8 @@ export function connect(): void {
       }
 
       resetStaleTimer();
-    } catch {
-      console.error("[ws] Failed to parse message");
+    } catch (error) {
+      showError("WebSocket message parse failed", error);
     }
   };
 

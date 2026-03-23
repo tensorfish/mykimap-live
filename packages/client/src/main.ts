@@ -1,3 +1,4 @@
+import { initErrorModal } from "./error-modal.js";
 import { initMap } from "./map.js";
 import { initStatusBar } from "./ui.js";
 import { initPanel } from "./panel.js";
@@ -5,6 +6,9 @@ import { initFilters } from "./filters.js";
 import { initPlaybackUI } from "./playback-ui.js";
 import { connect } from "./ws.js";
 import { transition } from "./store.js";
+
+// Init error modal first so it catches everything
+initErrorModal();
 
 // ── Bootstrap ──
 

@@ -3,6 +3,7 @@ import duckdb_wasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import duckdb_worker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
 import { applyTick } from "./store.js";
 import { clearAnimations } from "./layers.js";
+import { showError } from "./error-modal.js";
 import type { WorldState, VehiclePosition } from "./types.js";
 
 let db: duckdb.AsyncDuckDB | null = null;
@@ -293,9 +294,9 @@ export async function loadDay(date: string): Promise<boolean> {
     notify();
     return true;
   } catch (error) {
-    console.error("[playback] Failed to load day:", error);
+    showError("Failed to load recording", error);
     playback.loading = false;
-    playback.loadingProgress = `Error: ${error}`;
+    playback.loadingProgress = "";
     notify();
     return false;
   }
@@ -361,5 +362,5 @@ export async function listAvailableDates(): Promise<string[]> {
     const resp = await fetch("/data/snapshots");
     if (!resp.ok) return [];
     return await resp.json();
-  } catch { return []; }
+  } catch (error) { showError("Failed to list recordings", error); return []; }
 }

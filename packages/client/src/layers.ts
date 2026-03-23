@@ -57,7 +57,10 @@ async function fetchAndCacheShape(v: VehiclePosition): Promise<void> {
     } else {
       shapeCache.set(key, null);
     }
-  } catch { shapeCache.set(key, null); }
+  } catch (error) {
+    console.warn("[layers] Shape fetch failed for", key, error);
+    shapeCache.set(key, null);
+  }
   finally { shapeFetching.delete(key); }
 }
 

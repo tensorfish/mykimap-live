@@ -172,6 +172,71 @@
       }
       #history-btn:hover { color: #fff; background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.35); }
 
+      /* ── Error modal ── */
+      #error-overlay {
+        display: none;
+        position: absolute;
+        inset: 0;
+        z-index: 20;
+        background: rgba(0, 0, 0, 0.5);
+        align-items: center;
+        justify-content: center;
+      }
+      #error-overlay.visible { display: flex; }
+      #error-modal {
+        background: rgba(20, 10, 10, 0.95);
+        border: 1px solid rgba(220, 50, 50, 0.3);
+        border-radius: 12px;
+        padding: 24px 32px;
+        color: #e0e0e0;
+        max-width: 520px;
+        width: 90%;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+        backdrop-filter: blur(16px);
+      }
+      #error-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: #f44;
+        margin-bottom: 10px;
+      }
+      #error-message {
+        font-size: 13px;
+        color: #ccc;
+        margin-bottom: 12px;
+        line-height: 1.5;
+      }
+      #error-details {
+        background: rgba(0,0,0,0.4);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 6px;
+        padding: 10px 12px;
+        font-size: 11px;
+        color: #999;
+        max-height: 150px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-bottom: 14px;
+        font-family: monospace;
+      }
+      #error-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+      #error-copy, #error-dismiss {
+        background: none;
+        border: 1px solid rgba(255,255,255,0.15);
+        color: #aaa;
+        border-radius: 4px;
+        padding: 5px 14px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: all 0.15s;
+      }
+      #error-copy:hover, #error-dismiss:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
+
       /* ── Loading modal ── */
       #loading-overlay {
         display: none;
@@ -250,6 +315,19 @@
       <div class="filter-chip" data-filter="bus"><span class="dot" style="background:#FF8200"></span>Buses <span class="chip-count">—</span></div>
       <div class="filter-chip" data-filter="vline"><span class="dot" style="background:#A57FB2"></span>V/Line <span class="chip-count">—</span></div>
 
+    </div>
+
+    <!-- Error modal -->
+    <div id="error-overlay">
+      <div id="error-modal">
+        <div id="error-title">Something went wrong</div>
+        <div id="error-message"></div>
+        <pre id="error-details"></pre>
+        <div id="error-actions">
+          <button id="error-copy">Copy error details</button>
+          <button id="error-dismiss">Dismiss</button>
+        </div>
+      </div>
     </div>
 
     <div id="loading-overlay">

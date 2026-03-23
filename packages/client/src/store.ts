@@ -93,7 +93,10 @@ async function fetchRouteShape(tripId: string, routeId: string): Promise<void> {
     if (data.path && data.path.length > 0) {
       store.setState((prev) => ({ ...prev, routeShape: data.path }));
     }
-  } catch {}
+  } catch (error) {
+    // Route shape fetch is non-critical — log but don't modal
+    console.warn("[store] Route shape fetch failed:", error);
+  }
 }
 
 
