@@ -107,14 +107,29 @@
       #heatmap-toggle {
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 5px;
+        padding: 3px 8px;
+        border-radius: 4px;
+        border: 1px solid rgba(255,255,255,0.15);
         font-size: 11px;
         color: #888;
         cursor: pointer;
         user-select: none;
+        transition: all 0.15s;
       }
-      #heatmap-toggle input { cursor: pointer; margin: 0; }
-      #heatmap-toggle:has(input:checked) { color: #fff; }
+      #heatmap-toggle:hover { border-color: rgba(255,255,255,0.3); }
+      #heatmap-toggle input { display: none; }
+      #heatmap-toggle .heatmap-dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        background: linear-gradient(135deg, #ff4444, #ffaa00, #44cc44);
+        opacity: 0.35;
+        transition: opacity 0.15s;
+      }
+      #heatmap-toggle:has(input:checked) {
+        color: #fff;
+        border-color: rgba(255,255,255,0.25);
+      }
+      #heatmap-toggle:has(input:checked) .heatmap-dot { opacity: 1; }
       #filter-count { font-size: 11px; color: #666; }
       .chip-count {
         opacity: 0.5;
@@ -369,7 +384,7 @@
         <input id="filter-route" type="text" placeholder="Route" spellcheck="false" />
         <input id="filter-vehicle" type="text" placeholder="Vehicle ID" spellcheck="false" />
         <div id="filter-row-bottom">
-          <label id="heatmap-toggle"><input type="checkbox" id="heatmap-check" />Congestion</label>
+          <label id="heatmap-toggle"><input type="checkbox" id="heatmap-check" /><span class="heatmap-dot"></span>Congestion</label>
           <span id="filter-count"></span>
         </div>
       </div>
