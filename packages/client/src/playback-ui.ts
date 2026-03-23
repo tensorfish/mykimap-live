@@ -21,6 +21,8 @@ export function initPlaybackUI(): void {
   const slider = document.getElementById("pb-slider")! as HTMLInputElement;
   const timeLabel = document.getElementById("pb-time")!;
   const speedSelect = document.getElementById("pb-speed")! as HTMLSelectElement;
+  const loadingOverlay = document.getElementById("loading-overlay")!;
+  const loadingText = document.getElementById("loading-text")!;
 
   // History button
   historyBtn.addEventListener("click", async () => {
@@ -77,14 +79,16 @@ export function initPlaybackUI(): void {
   onPlaybackChange(() => {
     const state = getPlaybackState();
 
-    // Loading indicator
+    // Loading overlay
     if (state.loading) {
-      timeLabel.textContent = state.loadingProgress;
+      loadingOverlay.classList.add("visible");
+      loadingText.textContent = state.loadingProgress;
       playBtn.setAttribute("disabled", "");
       slider.setAttribute("disabled", "");
       return;
     }
 
+    loadingOverlay.classList.remove("visible");
     playBtn.removeAttribute("disabled");
     slider.removeAttribute("disabled");
 
