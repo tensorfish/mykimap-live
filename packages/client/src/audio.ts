@@ -10,12 +10,12 @@
 const STORAGE_KEY = "mykimap-sound";
 
 let ctx: AudioContext | null = null;
-let muted = true;
+let muted = false;
 
 // Restore preference
 try {
   const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored === "on") muted = false;
+  if (stored === "off") muted = true;
 } catch {}
 
 function getCtx(): AudioContext {
