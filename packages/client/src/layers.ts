@@ -295,22 +295,27 @@ export function feedTick(vehicles: VehiclePosition[]): void {
     const existing = anims.get(v.entityId);
     if (existing) {
       const lastTarget = existing.targets[existing.targets.length - 1] ?? existing.currentDist;
-      if (Math.abs(dist - lastTarget) > 0.5) {
+      const moveDist = Math.abs(dist - lastTarget);
+      const snapDt = existing.lastTs > 0 ? Math.abs(v.timestamp - existing.lastTs) : 30;
+
+      if (moveDist > 0.5) {
         existing.targets.push(dist);
 
         // Speed = distance to cover / time between this update and the last.
         // Use vehicle timestamps (not wall clock) for correct playback speed.
         // dtMs in computeFrame is already multiplied by speed multiplier,
         // so this speed should be in real m/s.
-        const snapDt = existing.lastTs > 0 ? Math.abs(v.timestamp - existing.lastTs) : 30;
-        const moveDist = Math.abs(dist - lastTarget);
         if (snapDt > 0 && moveDist > 1) {
           existing.speed = moveDist / snapDt;
         }
-
-        // Record speed into heatmap
-        recordHeatmapSpeed(existing.shapeKey, dist, existing.speed, now);
       }
+
+      // Heatmap: record speed for ALL vehicles, including stationary ones.
+      // If vehicle didn't move, realSpeed = 0. This ensures stopped vehicles
+      // correctly show red, not stale green from their last movement.
+      const realSpeed = (snapDt > 0 && moveDist > 1) ? moveDist / snapDt : 0;
+      recordHeatmapSpeed(existing.shapeKey, dist, realSpeed, now);
+
       existing.lastTs = v.timestamp;
     } else {
       // New vehicle — place at this position, no targets yet
