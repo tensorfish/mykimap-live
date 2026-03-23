@@ -313,8 +313,18 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
       };
     }
 
-    // Bearing from shape direction at current position
-    const bearing = bearingAtDist(shape, anim.currentDist, anim.direction);
+    // Bearing from actual movement: sample two nearby points on the shape
+    // in the direction the arrow is traveling. This is always correct
+    // regardless of whether the shape polyline runs forward or backward.
+    const lookBehind = 10; // meters
+    const behindDist = anim.currentDist - (lookBehind * anim.direction);
+    const behindPos = sampleShapeAtDist(shape, Math.max(0, Math.min(behindDist, shape.totalDist)));
+    let bearing = 0;
+    if (behindPos && (Math.abs(pos[0] - behindPos[0]) > 1e-8 || Math.abs(pos[1] - behindPos[1]) > 1e-8)) {
+      const dlon = pos[0] - behindPos[0];
+      const dlat = pos[1] - behindPos[1];
+      bearing = ((Math.atan2(dlon, dlat) * 180 / Math.PI) + 360) % 360;
+    }
 
     return {
       entityId: v.entityId, mode: v.mode,
