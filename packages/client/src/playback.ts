@@ -2,7 +2,7 @@ import * as duckdb from "@duckdb/duckdb-wasm";
 import duckdb_wasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import duckdb_worker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
 import { applyTick } from "./store.js";
-import { clearAnimations } from "./layers.js";
+import { clearAnimations, feedTick } from "./layers.js";
 import { showError } from "./error-modal.js";
 import type { WorldState, VehiclePosition } from "./types.js";
 
@@ -335,6 +335,29 @@ function findSnapshotIndex(ts: number): number {
   return lo;
 }
 
+// ── Heatmap from historical data ──
+
+const HEATMAP_WINDOW_S = 600; // 10 minutes — must match layers.ts
+
+/**
+ * Replay snapshots in the 10-minute window before `ts` through feedTick
+ * so the heatmap accumulates naturally via the existing shape-snapping
+ * and speed calculation code.
+ */
+function buildHeatmapForTime(ts: number): void {
+  if (allSnapshots.length === 0) return;
+
+  const windowStart = ts - HEATMAP_WINDOW_S;
+  const startIdx = findSnapshotIndex(windowStart);
+  const endIdx = findSnapshotIndex(ts);
+
+  for (let i = startIdx; i <= endIdx; i++) {
+    const snap = allSnapshots[i]!;
+    if (snap.timestamp < windowStart) continue;
+    feedTick(snap.vehicles);
+  }
+}
+
 // ── Controls ──
 
 export function seekTo(timestamp: number): void {
@@ -344,6 +367,11 @@ export function seekTo(timestamp: number): void {
   // Clear animation state so vehicles teleport to the new position
   // instead of slowly crawling from where they were.
   clearAnimations();
+
+  // Replay 10-min window to rebuild heatmap at the seek position.
+  // Must happen after clearAnimations (which wipes anim state) and
+  // before feedCurrentSnapshot (which sets the current frame).
+  buildHeatmapForTime(playback.currentTimestamp);
 
   // Reset all timeline indices to match the seek position
   for (const tl of vehicleTimelines.values()) {
