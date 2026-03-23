@@ -25,9 +25,7 @@ export function initPlaybackUI(): void {
   const fwdBtn = document.getElementById("pb-fwd")!;
   const slider = document.getElementById("pb-slider")! as HTMLInputElement;
   const timeLabel = document.getElementById("pb-time")!;
-  const markStart = document.getElementById("pb-mark-start")!;
-  const markMid = document.getElementById("pb-mark-mid")!;
-  const markEnd = document.getElementById("pb-mark-end")!;
+  const sliderTooltip = document.getElementById("pb-slider-tooltip")!;
   const speedSelect = document.getElementById("pb-speed")! as HTMLSelectElement;
   const bufferBarInner = document.getElementById("pb-buffer-bar-inner")!;
   const bufferingOverlay = document.getElementById("pb-buffering-overlay")!;
@@ -125,6 +123,22 @@ export function initPlaybackUI(): void {
   slider.addEventListener("mouseup", () => { scrubbing = false; });
   slider.addEventListener("touchend", () => { scrubbing = false; });
 
+  // Hover tooltip — shows time at the cursor position on the slider
+  const sliderWrap = document.getElementById("pb-slider-wrap")!;
+  sliderWrap.addEventListener("mousemove", (e) => {
+    const state = getPlaybackState();
+    if (!state.active || state.maxTimestamp <= state.minTimestamp) return;
+    const rect = slider.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const ts = state.minTimestamp + pct * (state.maxTimestamp - state.minTimestamp);
+    const time = new Date(ts * 1000).toLocaleTimeString("en-AU", {
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      timeZone: "Australia/Melbourne",
+    });
+    sliderTooltip.textContent = time;
+    sliderTooltip.style.left = `${pct * 100}%`;
+  });
+
   speedSelect.addEventListener("change", () => {
     setSpeed(parseInt(speedSelect.value, 10));
     sounds.speedChange();
@@ -169,19 +183,6 @@ export function initPlaybackUI(): void {
     }
 
     playBtn.textContent = state.playing ? "⏸" : "▶";
-
-    // Disable play button while initial load hasn't completed (no data at all yet)
-    // But don't disable during buffering (user can still pause)
-
-    // Slider time markers
-    if (state.active && state.maxTimestamp > state.minTimestamp) {
-      const fmt = (ts: number) => new Date(ts * 1000).toLocaleTimeString("en-AU", {
-        hour: "2-digit", minute: "2-digit", timeZone: "Australia/Melbourne",
-      });
-      markStart.textContent = fmt(state.minTimestamp);
-      markMid.textContent = fmt((state.minTimestamp + state.maxTimestamp) / 2);
-      markEnd.textContent = fmt(state.maxTimestamp);
-    }
   });
 
   function updateBufferBar(state: PlaybackState): void {
