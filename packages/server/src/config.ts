@@ -14,6 +14,9 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
+/** Project root directory — set by root package.json scripts via PROJECT_ROOT=$PWD */
+const PROJECT_ROOT = process.env.PROJECT_ROOT ?? process.cwd();
+
 // ── Config ──
 
 export const config = {
@@ -57,7 +60,7 @@ export const config = {
   /** Recording — DuckDB snapshot storage */
   recordingEnabled: optionalEnv("RECORDING_ENABLED", "true") === "true",
   recordingDataDir: optionalEnv("RECORDING_DATA_DIR",
-    new URL("../../../.data/snapshots", import.meta.url).pathname
+    `${PROJECT_ROOT}/.data/snapshots`
   ),
   recordingRetentionDays: parseInt(optionalEnv("RECORDING_RETENTION_DAYS", "30"), 10),
 
@@ -67,7 +70,7 @@ export const config = {
     "https://opendata.transport.vic.gov.au/dataset/3f4e292e-7f8a-4ffe-831f-1953be0fe448/resource/fb152201-859f-4882-9206-b768060b50ad/download/gtfs.zip"
   ),
   gtfsCacheDir: optionalEnv("GTFS_CACHE_DIR",
-    new URL("../../../.cache/gtfs", import.meta.url).pathname
+    `${PROJECT_ROOT}/.cache/gtfs`
   ),
 } as const;
 
