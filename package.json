@@ -12,6 +12,7 @@
     "build:client": "PROJECT_ROOT=$PWD bun run --filter client build",
     "build:docs": "PROJECT_ROOT=$PWD bun run --filter docs build",
     "start": "PROJECT_ROOT=$PWD bun run packages/server/dist/index.js",
+    "clean": "rm -rf packages/server/dist packages/client/dist docs/.vitepress/dist",
     "typecheck": "PROJECT_ROOT=$PWD bun run --filter '*' typecheck",
     "generate-snapshot": "PROJECT_ROOT=$PWD bun run packages/tools/src/generate-snapshot.ts"
   }
