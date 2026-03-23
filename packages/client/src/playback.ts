@@ -34,6 +34,25 @@ interface MemorySnapshot {
 let allSnapshots: MemorySnapshot[] = [];
 let lastFedIdx = -1;
 
+/**
+ * Per-vehicle movement timeline: only the timestamps where
+ * the vehicle's position actually changed. Built at load time.
+ * During playback, we feed upcoming targets from this timeline
+ * so the animation queue always has depth.
+ */
+interface VehicleTimeline {
+  entityId: string;
+  /** Positions where the vehicle actually moved: [timestamp, lat, lon] */
+  waypoints: Array<{ ts: number; lat: number; lon: number }>;
+  /** Index of the next waypoint to feed */
+  nextIdx: number;
+}
+
+const vehicleTimelines = new Map<string, VehicleTimeline>();
+
+/** How many future waypoints to queue ahead */
+const LOOKAHEAD = 5;
+
 // ── Listeners ──
 
 type Listener = () => void;
@@ -84,7 +103,13 @@ export function advancePlayback(dtMs: number): void {
 
 let lastNotifyTime = 0;
 
-/** Feed the snapshot at currentTimestamp into the live system (if it changed) */
+/**
+ * Feed vehicles with their next timeline waypoints as targets.
+ * Instead of feeding raw snapshots (which have duplicate positions
+ * from the 30s cache), we look ahead in each vehicle's timeline
+ * and feed the NEXT actual position change. This keeps the
+ * animation queue full and the movement continuous.
+ */
 function feedCurrentSnapshot(): void {
   if (allSnapshots.length === 0) return;
   const idx = findSnapshotIndex(playback.currentTimestamp);
@@ -92,9 +117,32 @@ function feedCurrentSnapshot(): void {
   lastFedIdx = idx;
 
   const snap = allSnapshots[idx]!;
+  const ts = playback.currentTimestamp;
+
+  // For each vehicle, advance its timeline index and build a vehicle
+  // with the NEXT waypoint position (where it should be heading).
+  const vehicles: VehiclePosition[] = snap.vehicles.map((v) => {
+    const tl = vehicleTimelines.get(v.entityId);
+    if (!tl || tl.waypoints.length === 0) return v;
+
+    // Advance timeline index past current playback time
+    while (tl.nextIdx < tl.waypoints.length - 1 && tl.waypoints[tl.nextIdx]!.ts <= ts) {
+      tl.nextIdx++;
+    }
+
+    // Use the current timeline waypoint as the vehicle position
+    // This is the actual moved-to position, not a cache duplicate
+    const wp = tl.waypoints[Math.min(tl.nextIdx, tl.waypoints.length - 1)]!;
+    return {
+      ...v,
+      latitude: wp.lat,
+      longitude: wp.lon,
+    };
+  });
+
   applyTick({
     timestamp: snap.timestamp,
-    vehicles: snap.vehicles,
+    vehicles,
     alerts: [],
     serverState: "RUNNING", seq: idx,
   });
@@ -206,6 +254,27 @@ export async function loadDay(date: string): Promise<boolean> {
     await conn.close();
     lastFedIdx = -1;
 
+    // Build per-vehicle movement timelines: only positions where the
+    // vehicle actually moved (skip duplicates from 30s feed cache).
+    playback.loadingProgress = "Building timelines...";
+    notify();
+
+    vehicleTimelines.clear();
+    for (const snap of allSnapshots) {
+      for (const v of snap.vehicles) {
+        let tl = vehicleTimelines.get(v.entityId);
+        if (!tl) {
+          tl = { entityId: v.entityId, waypoints: [], nextIdx: 0 };
+          vehicleTimelines.set(v.entityId, tl);
+        }
+        const last = tl.waypoints[tl.waypoints.length - 1];
+        // Only add if position actually changed (>~10m)
+        if (!last || Math.abs(v.latitude - last.lat) > 0.0001 || Math.abs(v.longitude - last.lon) > 0.0001) {
+          tl.waypoints.push({ ts: snap.timestamp, lat: v.latitude, lon: v.longitude });
+        }
+      }
+    }
+
     if (allSnapshots.length === 0) {
       playback.loading = false; notify(); return false;
     }
@@ -248,6 +317,15 @@ function findSnapshotIndex(ts: number): number {
 export function seekTo(timestamp: number): void {
   playback.currentTimestamp = Math.max(playback.minTimestamp, Math.min(timestamp, playback.maxTimestamp));
   lastFedIdx = -1;
+
+  // Reset all timeline indices to match the seek position
+  for (const tl of vehicleTimelines.values()) {
+    tl.nextIdx = 0;
+    while (tl.nextIdx < tl.waypoints.length - 1 && tl.waypoints[tl.nextIdx]!.ts <= playback.currentTimestamp) {
+      tl.nextIdx++;
+    }
+  }
+
   feedCurrentSnapshot();
   notify();
 }
@@ -271,6 +349,7 @@ export function stopPlayback(): void {
   playback.active = false;
   playback.playing = false;
   allSnapshots = [];
+  vehicleTimelines.clear();
   lastFedIdx = -1;
   notify();
 }
