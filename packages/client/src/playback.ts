@@ -200,50 +200,36 @@ export async function loadDay(date: string): Promise<boolean> {
     let offset = 0;
     for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.length; }
 
-    playback.loadingProgress = "Parsing recording...";
+    playback.loadingProgress = "Loading recording...";
     notify();
 
     await db!.registerFileBuffer(`${date}.parquet`, buffer);
     const conn = await db!.connect();
-    await conn.query(`CREATE OR REPLACE VIEW snap AS SELECT * FROM '${date}.parquet'`);
 
-    playback.loadingProgress = "Querying rows...";
+    // Stream rows in batches instead of materializing all at once.
+    // This prevents OOM on large recordings (full day = ~5M rows).
+    playback.loadingProgress = "Reading data...";
     notify();
 
-    const result = await conn.query(`SELECT * FROM snap ORDER BY timestamp, entity_id`);
-    const rows = result.toArray();
-    const totalRows = rows.length;
+    const grouped = new Map<number, VehiclePosition[]>();
+    let rowCount = 0;
 
-    playback.loadingProgress = `Grouping ${totalRows.toLocaleString()} rows...`;
-    notify();
+    const result = await conn.query(
+      `SELECT * FROM '${date}.parquet' ORDER BY timestamp`
+    );
 
-    const grouped = new Map<number, any[]>();
-    for (let i = 0; i < totalRows; i++) {
-      const row = rows[i]!;
-      const ts = Number((row as any).timestamp);
-      if (!grouped.has(ts)) grouped.set(ts, []);
-      grouped.get(ts)!.push(row);
-    }
+    // Process Arrow batches — each batch is a chunk of rows
+    const batches = result.batches;
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi]!;
+      const numRows = batch.numRows;
 
-    const sortedTimestamps = [...grouped.keys()].sort((a, b) => a - b);
-    const totalSnaps = sortedTimestamps.length;
-    const prevDists = new Map<string, { lat: number; lon: number }>();
+      for (let ri = 0; ri < numRows; ri++) {
+        const row = batch.get(ri) as any;
+        const ts = Number(row.timestamp);
 
-    playback.loadingProgress = `Processing ${totalSnaps.toLocaleString()} snapshots...`;
-    notify();
-
-    allSnapshots = [];
-    for (let si = 0; si < totalSnaps; si++) {
-      const ts = sortedTimestamps[si]!;
-      const rawRows = grouped.get(ts)!;
-      const vehicles: VehiclePosition[] = rawRows.map((row: any) => {
-        const entityId = row.entity_id;
-        const lat = row.latitude;
-        const lon = row.longitude;
-        prevDists.set(entityId, { lat, lon });
-
-        return {
-          entityId,
+        const v: VehiclePosition = {
+          entityId: row.entity_id,
           mode: row.mode,
           tripId: row.trip_id ?? "",
           routeId: row.route_id,
@@ -251,8 +237,8 @@ export async function loadDay(date: string): Promise<boolean> {
           startDate: row.start_date ?? "",
           vehicleId: row.vehicle_id,
           vehicleLabel: row.vehicle_label ?? "",
-          latitude: lat,
-          longitude: lon,
+          latitude: row.latitude,
+          longitude: row.longitude,
           bearing: row.bearing,
           speed: row.speed,
           timestamp: Number(row.vehicle_ts ?? ts),
@@ -260,22 +246,37 @@ export async function loadDay(date: string): Promise<boolean> {
           shapeDistTraveled: -1,
           shapeId: "",
         };
-      });
-      allSnapshots.push({ timestamp: ts, vehicles });
 
-      if (si % 200 === 0) {
-        playback.loadingProgress = `Processing snapshots... ${Math.floor((si / totalSnaps) * 100)}%`;
-        notify();
-        // Yield to the browser so the UI can update
-        await new Promise((r) => setTimeout(r, 0));
+        let arr = grouped.get(ts);
+        if (!arr) { arr = []; grouped.set(ts, arr); }
+        arr.push(v);
+        rowCount++;
       }
+
+      // Progress + yield every batch
+      playback.loadingProgress = `Reading data... ${rowCount.toLocaleString()} rows`;
+      notify();
+      if (bi % 4 === 0) await new Promise((r) => setTimeout(r, 0));
     }
 
     await conn.close();
+
+    // Build sorted snapshots
+    const sortedTimestamps = [...grouped.keys()].sort((a, b) => a - b);
+    allSnapshots = sortedTimestamps.map((ts) => ({
+      timestamp: ts,
+      vehicles: grouped.get(ts)!,
+    }));
+
+    // Free the grouped map — data now lives in allSnapshots
+    grouped.clear();
+
     lastFedIdx = -1;
 
-    // Build per-vehicle movement timelines: only positions where the
-    // vehicle actually moved (skip duplicates from 30s feed cache).
+    // Build per-vehicle movement timelines
+    playback.loadingProgress = "Preparing timelines...";
+    notify();
+
     vehicleTimelines.clear();
     for (let si = 0; si < allSnapshots.length; si++) {
       const snap = allSnapshots[si]!;
@@ -291,7 +292,7 @@ export async function loadDay(date: string): Promise<boolean> {
         }
       }
 
-      if (si % 200 === 0) {
+      if (si % 500 === 0) {
         playback.loadingProgress = `Preparing timelines... ${Math.floor((si / allSnapshots.length) * 100)}%`;
         notify();
         await new Promise((r) => setTimeout(r, 0));
