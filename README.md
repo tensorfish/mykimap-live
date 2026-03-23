@@ -6,9 +6,9 @@ Open it in a browser and watch ~2,000 vehicles move across the city — trams gl
 
 ## How it works
 
-A server polls 10 live feeds from Transport Victoria every 7 seconds, decodes the protobuf data, snaps each vehicle onto its actual route geometry (so it follows the road, not a straight line through buildings), and broadcasts smooth interpolated positions to every connected browser over WebSocket.
+A server polls 10 live feeds from Transport Victoria every 15 seconds, decodes the protobuf data, snaps each vehicle onto its actual route geometry, and broadcasts interpolated positions to every connected browser over WebSocket.
 
-The browser renders it all on a dark Mapbox base map using deck.gl for GPU-accelerated animation of thousands of moving dots.
+The browser renders it all on a dark Mapbox base map using deck.gl for GPU-accelerated animation of thousands of moving arrows with snail trails.
 
 ## Quickstart
 
@@ -59,13 +59,43 @@ On first run the server downloads the GTFS Schedule (~191 MB) to build the route
 bun run build
 ```
 
-### Docs
+## Tools
+
+### Generate test historical data
+
+Generate a synthetic DuckDB snapshot for testing the History playback feature:
+
+```bash
+bun run generate-snapshot -- --date 2026-03-22 --vehicles 30
+```
+
+This creates `.data/snapshots/2026-03-22.duckdb` with 91 simulated vehicles traveling along real Melbourne route geometry for 24 hours. Click History in the UI to play it back.
+
+Options:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--date` | `2026-03-22` | Date for the snapshot file |
+| `--output` | `.data/snapshots` | Output directory |
+| `--gtfs-cache` | `.cache/gtfs` | GTFS data directory |
+| `--vehicles` | `30` | Vehicles per mode |
+| `--interval` | `30` | Seconds between snapshots |
+
+Requires the GTFS Schedule to be cached first (run the server once to download it).
+
+### History playback
+
+The server records live data to DuckDB by default (`RECORDING_ENABLED=true`). Click **History** in the UI to browse and replay recorded days with adjustable speed (1×, 10×, 60×, 360×).
+
+Recordings are stored in `.data/snapshots/YYYY-MM-DD.duckdb` (Melbourne time) and retained for 30 days.
+
+## Docs
 
 ```bash
 bun run dev:docs
 ```
 
-Opens the VitePress documentation site at http://localhost:5173 with architecture diagrams, data flow, and setup guide.
+Opens the VitePress documentation site with architecture diagrams, data flow, and setup guide.
 
 ## Project structure
 
@@ -79,8 +109,9 @@ packages/
       state-machine.ts  Server state machine with transition logging
       logger.ts         Structured logging
       poller/           GTFS-RT feed fetching and protobuf decoding
-      interpolation/    Speed/bearing calculation, shape-following interpolation
+      interpolation/    Shape-following interpolation, 30s delayed playback
       shapes/           GTFS Schedule loader, route shape index, polyline snapping
+      recorder/         DuckDB snapshot recording + Parquet export
       broadcast/        WebSocket client management
     proto/
       gtfs-realtime.proto
@@ -91,10 +122,20 @@ packages/
       state-machine.ts  Client state machine
       ws.ts             WebSocket with auto-reconnect
       map.ts            Mapbox GL JS + deck.gl initialization
-      layers.ts         Vehicle ScatterplotLayer
-      ui.ts             Status bar (vanilla DOM)
+      layers.ts         Vehicle arrows, trails, route shapes
+      panel.ts          Vehicle info panel
+      filters.ts        Mode filter chips
+      playback.ts       DuckDB-WASM historical playback engine
+      playback-ui.ts    Playback controls (date picker, slider, speed)
+      icons.ts          Arrow icon generation
+      ui.ts             Status bar
+  tools/              CLI utilities
+    src/
+      generate-snapshot.ts  Generate synthetic test data
 docs/                 VitePress documentation site
 .memory/              Design documents and data analysis
+.data/snapshots/      DuckDB recordings (gitignored)
+.cache/gtfs/          Cached GTFS Schedule (gitignored)
 ```
 
 ## What's in the feeds

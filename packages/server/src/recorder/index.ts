@@ -97,18 +97,13 @@ export async function recordSnapshot(vehicles: VehiclePosition[], headerTimestam
 
   try {
     const conn = db.connect();
-    const stmt = conn.prepare(
-      `INSERT INTO snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    );
+    const esc = (s: string) => s.replace(/'/g, "''");
 
-    for (const v of vehicles) {
-      stmt.run(
-        headerTimestamp, v.entityId, v.mode, v.routeId, v.vehicleId,
-        v.latitude, v.longitude, v.bearing, v.speed, v.stale, v.shapeDistTraveled
-      );
-    }
+    const values = vehicles.map((v) =>
+      `(${headerTimestamp},'${esc(v.entityId)}','${esc(v.mode)}','${esc(v.routeId)}','${esc(v.vehicleId)}',${v.latitude},${v.longitude},${v.bearing},${v.speed},${v.stale},${v.shapeDistTraveled})`
+    ).join(",");
 
-    stmt.finalize();
+    conn.run(`INSERT INTO snapshots VALUES ${values}`);
     log("debug", `Recorded ${vehicles.length} vehicles to DuckDB`);
   } catch (error) {
     log("error", `DuckDB insert failed: ${error}`);

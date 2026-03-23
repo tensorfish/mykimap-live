@@ -43,6 +43,24 @@ On first run the server downloads the GTFS Schedule (~191 MB) to build the route
 bun run build
 ```
 
+## Tools
+
+### Generate test historical data
+
+```bash
+bun run generate-snapshot -- --date 2026-03-22 --vehicles 30
+```
+
+Creates a synthetic DuckDB snapshot with simulated vehicles traveling along real route geometry for 24 hours. Use the History button in the UI to play it back.
+
+Requires GTFS data — run the server once first to download it.
+
+### History playback
+
+The server records live data to DuckDB by default. Recordings are stored in `.data/snapshots/YYYY-MM-DD.duckdb` (Melbourne time) and retained for 30 days.
+
+Click **History** in the UI to browse and replay recorded days.
+
 ## Project structure
 
 ```
