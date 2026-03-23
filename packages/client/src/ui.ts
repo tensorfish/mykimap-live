@@ -1,5 +1,6 @@
 import { store } from "./store.js";
 import { reconnect } from "./ws.js";
+import { isMuted, toggleMuted, sounds } from "./audio.js";
 import type { ClientState } from "./types.js";
 
 const STATE_LABELS: Record<ClientState, string> = {
@@ -29,8 +30,36 @@ export function initStatusBar(): void {
   const label = document.getElementById("status-label")!;
   const info = document.getElementById("status-info")!;
   const btn = document.getElementById("reconnect-btn")! as HTMLButtonElement;
+  const soundBtn = document.getElementById("sound-btn")!;
 
   btn.addEventListener("click", reconnect);
+
+  // Sound toggle — update icon on click
+  function updateSoundBtn() {
+    soundBtn.textContent = isMuted() ? "🔇" : "🔊";
+    soundBtn.classList.toggle("on", !isMuted());
+  }
+  updateSoundBtn();
+  soundBtn.addEventListener("click", () => {
+    toggleMuted();
+    updateSoundBtn();
+  });
+
+  // Connection state sounds
+  let prevClientState: ClientState = "LOADING";
+  store.subscribe(() => {
+    const { clientState } = store.state;
+    if (clientState !== prevClientState) {
+      if (clientState === "ACTIVE" && prevClientState !== "LOADING") {
+        sounds.connect();
+      } else if (clientState === "DISCONNECTED") {
+        sounds.disconnect();
+      } else if (clientState === "RECONNECTING") {
+        sounds.reconnecting();
+      }
+      prevClientState = clientState;
+    }
+  });
 
   function update() {
     const { clientState, worldState } = store.state;

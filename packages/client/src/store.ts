@@ -1,6 +1,7 @@
 import { Store } from "@tanstack/store";
 import type { WorldState, ClientState, SegmentSpeed } from "./types.js";
 import { tryTransition } from "./state-machine.js";
+import { sounds } from "./audio.js";
 
 // ── App state ──
 
@@ -102,11 +103,16 @@ export function transition(to: ClientState, trigger: string): void {
 }
 
 export function selectVehicle(entityId: string | null): void {
-  store.setState((prev) => ({
-    ...prev,
+  const prev = store.state.selectedEntityId;
+  store.setState((s) => ({
+    ...s,
     selectedEntityId: entityId,
     routeShape: null,
   }));
+
+  // Sound feedback
+  if (entityId && entityId !== prev) sounds.select();
+  else if (!entityId && prev) sounds.deselect();
 
   if (entityId) {
     const vehicle = store.state.worldState?.vehicles.find(
@@ -135,6 +141,13 @@ async function fetchRouteShape(tripId: string, routeId: string): Promise<void> {
 
 
 export function applyTick(worldState: WorldState): void {
+  // Detect new service alerts
+  const prevAlertCount = store.state.worldState?.alerts?.length ?? 0;
+  const newAlertCount = worldState.alerts?.length ?? 0;
+  if (newAlertCount > prevAlertCount) {
+    sounds.alert();
+  }
+
   store.setState((prev) => ({
     ...prev,
     worldState,

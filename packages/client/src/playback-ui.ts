@@ -10,6 +10,7 @@ import {
   onPlaybackChange,
 } from "./playback.js";
 import { connect, disconnect } from "./ws.js";
+import { sounds } from "./audio.js";
 
 export function initPlaybackUI(): void {
   const historyBtn = document.getElementById("history-btn")!;
@@ -88,8 +89,8 @@ export function initPlaybackUI(): void {
 
   playBtn.addEventListener("click", () => {
     const state = getPlaybackState();
-    if (state.playing) pause();
-    else play();
+    if (state.playing) { pause(); sounds.pause(); }
+    else { play(); sounds.play(); }
   });
 
   backBtn.addEventListener("click", () => {
@@ -116,6 +117,7 @@ export function initPlaybackUI(): void {
 
   speedSelect.addEventListener("change", () => {
     setSpeed(parseInt(speedSelect.value, 10));
+    sounds.speedChange();
   });
 
   // React to playback state changes

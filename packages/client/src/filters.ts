@@ -1,4 +1,5 @@
 import { store, setFilter, setRouteFilter, setVehicleFilter, setHeatmapEnabled } from "./store.js";
+import { sounds } from "./audio.js";
 import type { Filters } from "./store.js";
 import type { TransportMode } from "./types.js";
 
@@ -18,6 +19,7 @@ export function initFilters(): void {
   // Heatmap toggle
   heatmapCheck.addEventListener("change", () => {
     setHeatmapEnabled(heatmapCheck.checked);
+    sounds.toggle();
   });
 
   // Mode chip toggles
@@ -25,6 +27,7 @@ export function initFilters(): void {
     chip.addEventListener("click", () => {
       const key = chip.dataset.filter as keyof Filters;
       setFilter(key, !store.state.filters[key]);
+      sounds.toggle();
     });
   }
 
