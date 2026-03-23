@@ -456,13 +456,28 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
       };
     }
 
-    // Bearing from movement direction on shape
-    const lookBehind = 10;
-    const behindDist = anim.currentDist - (lookBehind * anim.direction);
-    const behindPos = sampleShapeAtDist(shape, Math.max(0, Math.min(behindDist, shape.totalDist)));
+    // Bearing from movement direction on shape.
+    // Sample two points — one behind and one ahead — and average the
+    // bearing from each to the current position. This prevents flipping
+    // at shape inflection points where a single lookBehind can invert.
+    const LOOK_DIST = 50; // meters
+    const clamp = (d: number) => Math.max(0, Math.min(d, shape.totalDist));
+    const behindPos = sampleShapeAtDist(shape, clamp(anim.currentDist - LOOK_DIST * anim.direction));
+    const aheadPos = sampleShapeAtDist(shape, clamp(anim.currentDist + LOOK_DIST * anim.direction));
+
     let bearing = 0;
+    const bearings: number[] = [];
     if (behindPos && (Math.abs(pos[0] - behindPos[0]) > 1e-8 || Math.abs(pos[1] - behindPos[1]) > 1e-8)) {
-      bearing = ((Math.atan2(pos[0] - behindPos[0], pos[1] - behindPos[1]) * 180 / Math.PI) + 360) % 360;
+      bearings.push(((Math.atan2(pos[0] - behindPos[0], pos[1] - behindPos[1]) * 180 / Math.PI) + 360) % 360);
+    }
+    if (aheadPos && (Math.abs(aheadPos[0] - pos[0]) > 1e-8 || Math.abs(aheadPos[1] - pos[1]) > 1e-8)) {
+      bearings.push(((Math.atan2(aheadPos[0] - pos[0], aheadPos[1] - pos[1]) * 180 / Math.PI) + 360) % 360);
+    }
+    if (bearings.length > 0) {
+      // Circular average to handle 0°/360° wraparound
+      const sinSum = bearings.reduce((s, b) => s + Math.sin(b * Math.PI / 180), 0);
+      const cosSum = bearings.reduce((s, b) => s + Math.cos(b * Math.PI / 180), 0);
+      bearing = ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
     }
 
     return {
@@ -551,7 +566,14 @@ export function createHeatmapLayer(nowTs: number): PathLayer {
   const segments: HeatSegment[] = [];
 
   for (const [routeId, route] of heatmapData) {
-    const shape = shapeCache.get(routeId);
+    // Shape cache may be keyed by routeId or tripId — try both
+    let shape = shapeCache.get(routeId);
+    if (!shape) {
+      // Scan for a cache entry whose key contains this routeId
+      for (const [key, val] of shapeCache) {
+        if (val && key.includes(routeId)) { shape = val; break; }
+      }
+    }
     if (!shape) continue;
 
     const baseline = MODE_BASELINE_SPEED[route.mode] ?? 10;

@@ -18,6 +18,8 @@ export function initPlaybackUI(): void {
   const closeBtn = document.getElementById("pb-close")!;
   const dateSelect = document.getElementById("pb-date")! as HTMLInputElement;
   const playBtn = document.getElementById("pb-play")!;
+  const backBtn = document.getElementById("pb-back")!;
+  const fwdBtn = document.getElementById("pb-fwd")!;
   const slider = document.getElementById("pb-slider")! as HTMLInputElement;
   const timeLabel = document.getElementById("pb-time")!;
   const speedSelect = document.getElementById("pb-speed")! as HTMLSelectElement;
@@ -81,6 +83,16 @@ export function initPlaybackUI(): void {
     const state = getPlaybackState();
     if (state.playing) pause();
     else play();
+  });
+
+  backBtn.addEventListener("click", () => {
+    const state = getPlaybackState();
+    seekTo(state.currentTimestamp - 15);
+  });
+
+  fwdBtn.addEventListener("click", () => {
+    const state = getPlaybackState();
+    seekTo(state.currentTimestamp + 15);
   });
 
   let scrubbing = false;
