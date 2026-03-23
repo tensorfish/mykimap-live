@@ -216,64 +216,71 @@ export async function loadDay(date: string): Promise<boolean> {
     await db!.registerFileBuffer(`${date}.parquet`, buffer);
     const conn = await db!.connect();
 
-    // Stream rows in batches instead of materializing all at once.
-    // This prevents OOM on large recordings (full day = ~5M rows).
-    playback.loadingProgress = "Reading data...";
-    notify();
+    // Get the time range and total row count without loading all data
+    const metaResult = await conn.query(
+      `SELECT MIN(timestamp) as t_min, MAX(timestamp) as t_max, COUNT(*) as total FROM '${date}.parquet'`
+    );
+    const meta = metaResult.toArray()[0] as any;
+    const tMin = Number(meta.t_min);
+    const tMax = Number(meta.t_max);
+    const totalRows = Number(meta.total);
 
+    if (totalRows === 0 || tMax <= tMin) {
+      await conn.close();
+      playback.loading = false;
+      notify();
+      return false;
+    }
+
+    // Read in time-based chunks to avoid OOM.
+    // Each chunk covers ~10 minutes = ~20 snapshots × ~2000 vehicles = ~40k rows.
+    const CHUNK_SECONDS = 600;
     const grouped = new Map<number, VehiclePosition[]>();
     let rowCount = 0;
 
-    const result = await conn.query(
-      `SELECT * FROM '${date}.parquet' ORDER BY timestamp`
-    );
+    for (let chunkStart = tMin; chunkStart <= tMax; chunkStart += CHUNK_SECONDS) {
+      if (signal.aborted) { await conn.close(); return false; }
 
-    // Total rows from Arrow metadata for progress reporting
-    const totalRows = result.batches.reduce((n, b) => n + b.numRows, 0);
+      const chunkEnd = Math.min(chunkStart + CHUNK_SECONDS, tMax + 1);
+      const chunkResult = await conn.query(
+        `SELECT * FROM '${date}.parquet' WHERE timestamp >= ${chunkStart} AND timestamp < ${chunkEnd} ORDER BY timestamp`
+      );
 
-    // Process Arrow batches — each batch is a chunk of rows
-    const batches = result.batches;
-    for (let bi = 0; bi < batches.length; bi++) {
-      const batch = batches[bi]!;
-      const numRows = batch.numRows;
+      for (const batch of chunkResult.batches) {
+        for (let ri = 0; ri < batch.numRows; ri++) {
+          const row = batch.get(ri) as any;
+          const ts = Number(row.timestamp);
 
-      for (let ri = 0; ri < numRows; ri++) {
-        const row = batch.get(ri) as any;
-        const ts = Number(row.timestamp);
+          const v: VehiclePosition = {
+            entityId: row.entity_id,
+            mode: row.mode,
+            tripId: row.trip_id ?? "",
+            routeId: row.route_id,
+            startTime: row.start_time ?? "",
+            startDate: row.start_date ?? "",
+            vehicleId: row.vehicle_id,
+            vehicleLabel: row.vehicle_label ?? "",
+            latitude: row.latitude,
+            longitude: row.longitude,
+            bearing: row.bearing,
+            speed: row.speed,
+            timestamp: Number(row.vehicle_ts ?? ts),
+            stale: false,
+            shapeDistTraveled: -1,
+            shapeId: "",
+          };
 
-        const v: VehiclePosition = {
-          entityId: row.entity_id,
-          mode: row.mode,
-          tripId: row.trip_id ?? "",
-          routeId: row.route_id,
-          startTime: row.start_time ?? "",
-          startDate: row.start_date ?? "",
-          vehicleId: row.vehicle_id,
-          vehicleLabel: row.vehicle_label ?? "",
-          latitude: row.latitude,
-          longitude: row.longitude,
-          bearing: row.bearing,
-          speed: row.speed,
-          timestamp: Number(row.vehicle_ts ?? ts),
-          stale: false,
-          shapeDistTraveled: -1,
-          shapeId: "",
-        };
-
-        let arr = grouped.get(ts);
-        if (!arr) { arr = []; grouped.set(ts, arr); }
-        arr.push(v);
-        rowCount++;
+          let arr = grouped.get(ts);
+          if (!arr) { arr = []; grouped.set(ts, arr); }
+          arr.push(v);
+          rowCount++;
+        }
       }
 
-      // Progress + yield every batch
       const pct = totalRows > 0 ? Math.floor((rowCount / totalRows) * 100) : 0;
       playback.loadingProgress = `Reading data... ${pct}%`;
       notify();
-      if (bi % 4 === 0) {
-        await new Promise((r) => setTimeout(r, 0));
-        if (signal.aborted) { await conn.close(); return false; }
-      }
+      await new Promise((r) => setTimeout(r, 0));
     }
 
     await conn.close();
