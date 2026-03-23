@@ -180,6 +180,12 @@ function bearingAt(shape: ShapePoint[], dist: number): number {
 
 // ── Generate simulated vehicles ──
 
+/** Minimum route length in meters — skip short routes to avoid wiggling */
+const MIN_ROUTE_LENGTH = 5000;
+
+/** Dwell time at each terminus in seconds (wait before reversing) */
+const DWELL_TIME = 120;
+
 interface SimVehicle {
   entityId: string;
   mode: string;
@@ -189,6 +195,7 @@ interface SimVehicle {
   shapeDist: number;
   speed: number; // m/s
   direction: number; // +1 or -1
+  dwellRemaining: number; // seconds of dwell left at terminus
 }
 
 function createVehicles(routes: Route[]): SimVehicle[] {
@@ -196,6 +203,8 @@ function createVehicles(routes: Route[]): SimVehicle[] {
   const modeRoutes = new Map<string, Route[]>();
 
   for (const r of routes) {
+    // Skip short routes — they cause rapid bouncing that looks like wiggling
+    if (r.totalDist < MIN_ROUTE_LENGTH) continue;
     if (!modeRoutes.has(r.mode)) modeRoutes.set(r.mode, []);
     modeRoutes.get(r.mode)!.push(r);
   }
@@ -209,15 +218,18 @@ function createVehicles(routes: Route[]): SimVehicle[] {
   };
 
   for (const [mode, modeRts] of modeRoutes) {
+    // Sort by route length descending — prefer longer routes
+    modeRts.sort((a, b) => b.totalDist - a.totalDist);
+
     const count = Math.min(VEHICLES_PER_MODE, modeRts.length);
     for (let i = 0; i < count; i++) {
       const route = modeRts[i % modeRts.length]!;
 
       // Distribute vehicles evenly along the route
-      const startFraction = (i / count);
+      const startFraction = i / count;
       const startDist = startFraction * route.totalDist;
 
-      // Alternate direction so half go outbound, half return
+      // Alternate direction
       const direction = i % 2 === 0 ? 1 : -1;
 
       vehicles.push({
@@ -227,8 +239,9 @@ function createVehicles(routes: Route[]): SimVehicle[] {
         vehicleId: `${mode.toUpperCase()}-${String(i).padStart(3, "0")}`,
         route,
         shapeDist: startDist,
-        speed: modeSpeeds[mode]! * (0.8 + Math.random() * 0.4), // ±20% variation
+        speed: modeSpeeds[mode]! * (0.8 + Math.random() * 0.4),
         direction,
+        dwellRemaining: 0,
       });
     }
   }
@@ -237,19 +250,22 @@ function createVehicles(routes: Route[]): SimVehicle[] {
 }
 
 function stepVehicle(v: SimVehicle, dt: number): void {
+  // If dwelling at terminus, count down and don't move
+  if (v.dwellRemaining > 0) {
+    v.dwellRemaining -= dt;
+    return;
+  }
+
   let remaining = v.speed * dt;
 
-  // Advance along the route, bouncing at both ends.
-  // Carry leftover distance into the reverse direction so the
-  // vehicle progresses continuously instead of sticking at endpoints.
   while (remaining > 0.1) {
     if (v.direction > 0) {
       const toEnd = v.route.totalDist - v.shapeDist;
       if (remaining >= toEnd) {
-        // Hit the end — bounce
         v.shapeDist = v.route.totalDist;
-        remaining -= toEnd;
+        remaining = 0; // stop at terminus, don't carry over
         v.direction = -1;
+        v.dwellRemaining = DWELL_TIME; // wait before returning
       } else {
         v.shapeDist += remaining;
         remaining = 0;
@@ -257,10 +273,10 @@ function stepVehicle(v: SimVehicle, dt: number): void {
     } else {
       const toStart = v.shapeDist;
       if (remaining >= toStart) {
-        // Hit the start — bounce
         v.shapeDist = 0;
-        remaining -= toStart;
+        remaining = 0;
         v.direction = 1;
+        v.dwellRemaining = DWELL_TIME;
       } else {
         v.shapeDist -= remaining;
         remaining = 0;
