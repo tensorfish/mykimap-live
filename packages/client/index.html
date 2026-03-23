@@ -49,11 +49,13 @@
     <div id="status">
       <span id="status-dot"></span>
       <span id="status-label">Loading…</span>
-      <span id="status-info" style="color: #aaa"></span>
+      <span id="status-info"></span>
       <button id="reconnect-btn">Reconnect</button>
-      <button id="history-btn">History</button>
-      <button id="sound-btn" title="Toggle sound">🔇</button>
-      <a id="x-link" href="https://x.com/tensorfish" target="_blank" rel="noopener" title="@tensorfish on X">𝕏</a>
+      <div id="status-actions">
+        <button id="history-btn">History</button>
+        <button id="sound-btn" title="Toggle sound">🔇</button>
+        <a id="x-link" href="https://x.com/tensorfish" target="_blank" rel="noopener" title="@tensorfish on X">𝕏</a>
+      </div>
     </div>
 
     <div id="filters">
@@ -80,8 +82,8 @@
         <div id="error-message"></div>
         <pre id="error-details"></pre>
         <div id="error-actions">
-          <button id="error-copy">Copy error details</button>
-          <button id="error-dismiss">Dismiss</button>
+          <button id="error-copy" class="btn-ghost">Copy error details</button>
+          <button id="error-dismiss" class="btn-ghost">Dismiss</button>
         </div>
       </div>
     </div>
@@ -127,7 +129,7 @@
         <div class="legend-row"><span class="dot" style="background:#A57FB2"></span> V/Line</div>
       </div>
       <div id="legend-hint">Click any vehicle for details</div>
-      <button id="legend-dismiss">Got it</button>
+      <button id="legend-dismiss" class="btn-subtle">Got it</button>
     </div>
 
     <script type="module" src="/src/main.ts"></script>
