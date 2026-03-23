@@ -20,13 +20,11 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let broadcastTimer: ReturnType<typeof setInterval> | null = null;
 let broadcastSeq = 0;
 
-/** Recent broadcast ticks — sent as backlog to new clients so they
- *  can build a continuous path queue before animation starts. */
-/** Number of recent broadcast ticks sent to new clients on connect.
- *  Client fast-forwards through all but the last tick to pre-build
- *  the trail, then animates from the last tick onward.
- *  Minimum 5 so the trail is visible from the first frame. */
-const BACKLOG_SIZE = 10;
+/** Recent broadcast ticks sent to new clients on connect.
+ *  Client places arrows at the oldest position and animates them
+ *  forward to the latest over ~3 seconds. Larger backlog = more
+ *  visible initial movement. At 1 tick/s, 15 ticks = 15s of travel. */
+const BACKLOG_SIZE = 15;
 const tickBacklog: WorldState[] = [];
 
 // ── Boot sequence ──

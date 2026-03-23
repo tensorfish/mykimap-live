@@ -138,20 +138,47 @@ const anims = new Map<string, VehicleAnim>();
 
 // ── Process incoming ticks ──
 
+/** How many seconds the initial catch-up animation should take */
+const CATCHUP_SECONDS = 3;
+
 export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {
   if (backlog.length === 0) return;
 
-  // Process all ticks to build animation states
+  // Process all ticks to build animation states (sets targetDist to latest)
   for (const tick of backlog) {
     feedTick(tick.vehicles, true);
   }
 
-  // Build recentDists from the last TRAIL_UPDATES+1 ticks in the backlog.
-  // This gives the trail its initial length on page load.
-  const trailTicks = backlog.slice(-(TRAIL_UPDATES + 1));
+  // Use the FIRST tick as the starting position — this is the oldest
+  // data in the backlog (~10s old). The arrow starts there and animates
+  // toward the latest position over CATCHUP_SECONDS.
+  // This gives visible movement the instant the page loads.
+  const firstTick = backlog[0]!;
+  const firstVehicles = new Map<string, VehiclePosition>();
+  for (const v of firstTick.vehicles) firstVehicles.set(v.entityId, v);
+
+  // Build recentDists from evenly spaced ticks across the backlog
+  // so the trail shows the full travel distance from backlog start to end.
+  const sampleIndices = [0, Math.floor(backlog.length / 3), Math.floor(backlog.length * 2 / 3), backlog.length - 1];
+
   for (const [entityId, anim] of anims) {
+    // Starting position: oldest tick in backlog
+    const firstV = firstVehicles.get(entityId);
+    if (firstV && firstV.shapeDistTraveled >= 0) {
+      anim.currentDist = firstV.shapeDistTraveled;
+
+      const dist = Math.abs(anim.targetDist - anim.currentDist);
+      if (dist > 1) {
+        anim.speed = dist / CATCHUP_SECONDS;
+        anim.direction = anim.targetDist >= anim.currentDist ? 1 : -1;
+      }
+    }
+
+    // Build recentDists from sampled backlog ticks
     const dists: number[] = [];
-    for (const tick of trailTicks) {
+    for (const idx of sampleIndices) {
+      const tick = backlog[idx];
+      if (!tick) continue;
       const v = tick.vehicles.find((v) => v.entityId === entityId);
       if (v && v.shapeDistTraveled >= 0) {
         const last = dists[dists.length - 1];
@@ -161,23 +188,6 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
       }
     }
     if (dists.length > 0) anim.recentDists = dists;
-  }
-
-  // Set currentDist to 3 ticks ago so arrows start moving immediately.
-  const ticksBack = Math.min(3, backlog.length);
-  const oldTick = backlog[backlog.length - ticksBack];
-  if (!oldTick) return;
-
-  for (const [entityId, anim] of anims) {
-    const oldV = oldTick.vehicles.find((v) => v.entityId === entityId);
-    if (oldV && oldV.shapeDistTraveled >= 0) {
-      anim.currentDist = oldV.shapeDistTraveled;
-      const dist = Math.abs(anim.targetDist - anim.currentDist);
-      if (dist > 0) {
-        anim.speed = dist / ticksBack;
-        anim.direction = anim.targetDist >= anim.currentDist ? 1 : -1;
-      }
-    }
   }
 }
 
