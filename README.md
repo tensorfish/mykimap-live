@@ -85,9 +85,21 @@ Requires the GTFS Schedule to be cached first (run the server once to download i
 
 ### History playback
 
-The server records live data to DuckDB by default (`RECORDING_ENABLED=true`). Click **History** in the UI to browse and replay recorded days with adjustable speed (1×, 10×, 60×, 360×).
+The server records live data to DuckDB by default (`RECORDING_ENABLED=true`). Click **History** in the UI to browse and replay recorded days with adjustable speed (1×, 10×, 60×, 360×). The server auto-exports today's recording to Parquet every 5 minutes.
 
 Recordings are stored in `.data/snapshots/YYYY-MM-DD.duckdb` (Melbourne time) and retained for 30 days.
+
+### Congestion heatmap
+
+Toggle "Congestion" in the expanded filter bar to overlay speed-colored route segments. Green = flowing, yellow = slow, red = stopped. Based on 10 minutes of accumulated vehicle speed data.
+
+### Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| Space | Play/pause (playback mode) |
+| Escape | Deselect vehicle / close panel |
+| ← → | Skip ±15s (playback mode) |
 
 ## Docs
 
@@ -111,7 +123,8 @@ packages/
       poller/           GTFS-RT feed fetching and protobuf decoding
       interpolation/    Shape-following interpolation, 30s delayed playback
       shapes/           GTFS Schedule loader, route shape index, polyline snapping
-      recorder/         DuckDB snapshot recording + Parquet export
+      recorder/         DuckDB recording + auto Parquet export (every 5 min)
+      congestion/       Per-segment speed tracking for heatmap
       broadcast/        WebSocket client management
     proto/
       gtfs-realtime.proto
@@ -122,9 +135,10 @@ packages/
       state-machine.ts  Client state machine
       ws.ts             WebSocket with auto-reconnect
       map.ts            Mapbox GL JS + deck.gl initialization
-      layers.ts         Vehicle arrows, trails, route shapes
+      layers.ts         Vehicle arrows, trails, heatmap, shape cache, animation
       panel.ts          Vehicle info panel
-      filters.ts        Mode filter chips
+      filters.ts        Mode chips, route/vehicle filter, congestion toggle
+      styles.css        All CSS
       playback.ts       DuckDB-WASM historical playback engine
       playback-ui.ts    Playback controls (date picker, slider, speed)
       icons.ts          Arrow icon generation

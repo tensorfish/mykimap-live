@@ -34,6 +34,7 @@ These are living documents that describe the system as it is, not as it was.
 | `overview.md` | What the product is, who it's for, scale, data sources | Scope changes, new modes added, new data sources |
 | `tech-stack.md` | Architecture, dependencies, data flow, design constraints, architectural seams | Any dependency added/removed, any architectural change |
 | `animation-architecture.md` | How vehicles animate — single pipeline for live and playback, route-based animation, speed multiplier | Any change to `feedTick`, `computeFrame`, animation state, render loop, or playback integration |
+| `congestion-heatmap.md` | Congestion heatmap: server-seeds-then-client-accumulates, segment structure, color mapping, caching | Any change to congestion tracking, segment size, color ramp, or heatmap layer |
 | `future-time-machine.md` | Time machine design: Parquet snapshots, DuckDB-WASM playback, architectural seams | Any change to `WorldState`, `applyTick()`, `PollResult`, or the poll/broadcast pipeline |
 | `state-transitions.md` | State machines, valid transitions, timing constants, log format | Any state added/removed, any transition changed, any timing constant changed |
 | `gtfs-vic.md` | Feed structure, field availability, endpoints, auth, rate limits, shapes, colors | Any feed-related discovery or change |
@@ -95,6 +96,8 @@ packages/server/          Bun backend
     interpolation/        Position interpolation (shape-following + fallback)
     shapes/               GTFS Schedule loader and route shape snapping
     broadcast/            WebSocket management
+    recorder/             DuckDB recording + auto Parquet export (every 5 min)
+    congestion/           Per-segment speed tracking (10-min sliding window)
 
 packages/client/          Vite frontend (vanilla TS, no framework)
   src/
@@ -103,8 +106,13 @@ packages/client/          Vite frontend (vanilla TS, no framework)
     state-machine.ts      Client FSM
     ws.ts                 WebSocket connection
     map.ts                Mapbox + deck.gl
-    layers.ts             Vehicle rendering layer
+    layers.ts             Vehicle + trail + heatmap rendering, shape cache, animation
     ui.ts                 Status bar DOM bindings
+    filters.ts            Mode chips, route/vehicle text filter, congestion toggle
+    playback.ts           DuckDB-WASM playback engine, per-vehicle timelines
+    playback-ui.ts        Playback controls (slider, buttons, speed, date picker)
+    panel.ts              Vehicle info panel (click-to-select)
+    styles.css            All CSS (extracted from index.html)
 
 docs/                     VitePress documentation site
   .vitepress/config.ts    VitePress + Mermaid config

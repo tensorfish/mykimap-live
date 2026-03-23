@@ -49,8 +49,9 @@ The server is authoritative — clients render exactly what the server sends. Th
 
 ### Key design decisions
 
-- **No database — for now.** Live vehicle state is ephemeral in-memory. The architecture preserves seams for a future [time machine feature](/data-flow#future-time-machine): DuckDB on both sides — server records snapshots to daily `.duckdb` files, exports to Parquet; client queries with DuckDB-WASM for historical playback and timelapse.
-- **No REST API.** All client communication is one-way WebSocket broadcast.
+- **DuckDB recording enabled by default.** Server records raw feed data to daily `.duckdb` files, auto-exports to Parquet every 5 minutes. Client loads recordings via DuckDB-WASM for historical playback with time controls.
+- **Congestion heatmap.** Server accumulates per-segment (200m) vehicle speeds over a 10-minute sliding window. Seeds new clients on connect. Client maintains locally after that. See `.memory/congestion-heatmap.md`.
+- **No REST API.** All client communication is one-way WebSocket broadcast (plus HTTP for shapes, recordings, and health).
 - **Route-snapped interpolation.** Vehicles follow their GTFS route shape polyline — actual road/track/tram line geometry. No cutting through buildings. Falls back to straight-line for unmatched vehicles.
 - **GTFS Schedule shapes loaded at boot.** The static GTFS ZIP (~191 MB) is downloaded once, cached, and shapes + trips are extracted to build an in-memory `trip_id → shape polyline` index.
 - **Stale vehicle detection.** Vehicles with per-entity timestamps >120s old are held at their last position, not projected forward.
@@ -64,6 +65,10 @@ The server is authoritative — clients render exactly what the server sends. Th
 2. **Receive** world state ticks over WebSocket
 3. **Update** the vehicle layer via TanStack Store subscription
 4. **Display** connection status and vehicle counts
+5. **Filter** vehicles by mode, route ID, and vehicle ID
+6. **Congestion overlay** — speed-colored route segments (green/yellow/red)
+7. **Historical playback** — load Parquet recordings, scrub timeline, speed controls
+8. **Keyboard shortcuts** — Space (play/pause), Escape (deselect), arrows (skip ±15s)
 
 ### Stack
 
