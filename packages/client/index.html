@@ -83,12 +83,12 @@
       #filter-row {
         width: 100%;
         display: flex;
-        align-items: center;
-        gap: 6px;
-        margin-top: 4px;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 6px;
       }
-      #filter-route, #filter-vehicle {
-        flex: 1;
+      #filter-row input {
+        width: 100%;
         background: rgba(255,255,255,0.08);
         border: 1px solid rgba(255,255,255,0.15);
         color: #fff;
@@ -96,11 +96,10 @@
         padding: 4px 8px;
         font-size: 12px;
         outline: none;
-        min-width: 0;
       }
-      #filter-route:focus, #filter-vehicle:focus { border-color: rgba(255,255,255,0.35); }
-      #filter-route::placeholder, #filter-vehicle::placeholder { color: #555; }
-      #filter-count { font-size: 11px; color: #666; white-space: nowrap; }
+      #filter-row input:focus { border-color: rgba(255,255,255,0.35); }
+      #filter-row input::placeholder { color: #555; }
+      #filter-count { font-size: 11px; color: #666; align-self: flex-end; }
       .chip-count {
         opacity: 0.5;
         font-variant-numeric: tabular-nums;
