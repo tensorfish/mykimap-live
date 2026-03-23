@@ -320,6 +320,10 @@ export function seekTo(timestamp: number): void {
   playback.currentTimestamp = Math.max(playback.minTimestamp, Math.min(timestamp, playback.maxTimestamp));
   lastFedIdx = -1;
 
+  // Clear animation state so vehicles teleport to the new position
+  // instead of slowly crawling from where they were.
+  clearAnimations();
+
   // Reset all timeline indices to match the seek position
   for (const tl of vehicleTimelines.values()) {
     tl.nextIdx = 0;
