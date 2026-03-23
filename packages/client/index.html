@@ -45,12 +45,13 @@
         padding: 8px 12px;
         border-radius: 6px;
         font-size: 12px;
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
-        align-items: center;
         pointer-events: auto;
         backdrop-filter: blur(8px);
+      }
+      #filter-chips {
+        display: flex;
+        gap: 6px;
+        align-items: center;
       }
       .filter-chip {
         display: flex;
@@ -86,8 +87,6 @@
         flex-direction: column;
         gap: 4px;
         margin-top: 6px;
-        /* Take full width of the flex line (chips row) without expanding the container */
-        flex-basis: 100%;
       }
       #filter-row input {
         background: rgba(255,255,255,0.08);
@@ -343,11 +342,13 @@
     </div>
 
     <div id="filters">
-      <div class="filter-chip" data-filter="metro"><span class="dot" style="background:#34ACE1"></span>Trains <span class="chip-count">—</span></div>
-      <div class="filter-chip" data-filter="tram"><span class="dot" style="background:#78BE20"></span>Trams <span class="chip-count">—</span></div>
-      <div class="filter-chip" data-filter="bus"><span class="dot" style="background:#FF8200"></span>Buses <span class="chip-count">—</span></div>
-      <div class="filter-chip" data-filter="vline"><span class="dot" style="background:#A57FB2"></span>V/Line <span class="chip-count">—</span></div>
-      <button id="filter-expand" title="Filter by route or vehicle">▼</button>
+      <div id="filter-chips">
+        <div class="filter-chip" data-filter="metro"><span class="dot" style="background:#34ACE1"></span>Trains <span class="chip-count">—</span></div>
+        <div class="filter-chip" data-filter="tram"><span class="dot" style="background:#78BE20"></span>Trams <span class="chip-count">—</span></div>
+        <div class="filter-chip" data-filter="bus"><span class="dot" style="background:#FF8200"></span>Buses <span class="chip-count">—</span></div>
+        <div class="filter-chip" data-filter="vline"><span class="dot" style="background:#A57FB2"></span>V/Line <span class="chip-count">—</span></div>
+        <button id="filter-expand" title="Filter by route or vehicle">▼</button>
+      </div>
       <div id="filter-row" style="display:none">
         <input id="filter-route" type="text" placeholder="Route" spellcheck="false" />
         <input id="filter-vehicle" type="text" placeholder="Vehicle ID" spellcheck="false" />
