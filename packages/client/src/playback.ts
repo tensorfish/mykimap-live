@@ -214,60 +214,36 @@ function findSnapshotIndex(ts: number): number {
   return lo;
 }
 
-let lastRenderedIdx = -1;
+/** Track which snapshot index was last fed to the live animation system */
+let lastFedIdx = -1;
 
+/**
+ * Feed the next snapshot into the live animation pipeline when the
+ * playback timestamp crosses into a new snapshot.
+ *
+ * No custom interpolation here — the live system (feedTick → route
+ * shape animation → computeFrame → trails) handles all the smooth
+ * movement. We just tell it "here are the new vehicle positions"
+ * at the right moments.
+ */
 function renderAtCurrentTime(): void {
-  if (allSnapshots.length < 2) return;
+  if (allSnapshots.length === 0) return;
 
-  const ts = playback.currentTimestamp;
-  const idxA = findSnapshotIndex(ts);
-  const idxB = Math.min(idxA + 1, allSnapshots.length - 1);
+  const idx = findSnapshotIndex(playback.currentTimestamp);
 
-  const snapA = allSnapshots[idxA]!;
-  const snapB = allSnapshots[idxB]!;
+  // Only feed a new snapshot when we cross into a new one
+  if (idx === lastFedIdx) return;
+  lastFedIdx = idx;
 
-  // Lerp factor between A and B
-  const span = snapB.timestamp - snapA.timestamp;
-  const t = span > 0 ? (ts - snapA.timestamp) / span : 0;
-
-  // Build a vehicle lookup for snapshot B
-  const vehiclesB = new Map<string, VehiclePosition>();
-  for (const v of snapB.vehicles) vehiclesB.set(v.entityId, v);
-
-  // Interpolate positions between A and B
-  const interpolated: VehiclePosition[] = snapA.vehicles.map((vA) => {
-    const vB = vehiclesB.get(vA.entityId);
-    if (!vB) return vA; // Vehicle not in B — use A's position
-
-    return {
-      ...vA,
-      latitude: vA.latitude + t * (vB.latitude - vA.latitude),
-      longitude: vA.longitude + t * (vB.longitude - vA.longitude),
-      bearing: vB.bearing || vA.bearing,
-      speed: span > 0
-        ? Math.sqrt(
-            Math.pow((vB.latitude - vA.latitude) * 111000, 2) +
-            Math.pow((vB.longitude - vA.longitude) * 111000 * Math.cos(vA.latitude * Math.PI / 180), 2)
-          ) / span
-        : 0,
-      timestamp: Math.floor(ts),
-    };
-  });
-
-  // Also include vehicles only in B (new arrivals)
-  for (const vB of snapB.vehicles) {
-    if (!snapA.vehicles.find((v) => v.entityId === vB.entityId)) {
-      interpolated.push(vB);
-    }
-  }
+  const snap = allSnapshots[idx]!;
 
   applyTick({
-    timestamp: Math.floor(ts),
-    vehicles: interpolated,
+    timestamp: snap.timestamp,
+    vehicles: snap.vehicles,
     trails: {},
     alerts: [],
     serverState: "RUNNING",
-    seq: idxA,
+    seq: idx,
   });
 }
 
@@ -275,6 +251,7 @@ function renderAtCurrentTime(): void {
 
 export function seekTo(timestamp: number): void {
   playback.currentTimestamp = Math.max(playback.minTimestamp, Math.min(timestamp, playback.maxTimestamp));
+  lastFedIdx = -1; // force re-feed on seek
   notify();
   renderAtCurrentTime();
 }
@@ -301,6 +278,7 @@ export function stopPlayback(): void {
   playback.active = false;
   playback.playing = false;
   allSnapshots = [];
+  lastFedIdx = -1;
   notify();
   if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
 }
