@@ -283,17 +283,14 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
       };
     }
 
-    // Advance along the route at constant velocity.
-    // Two modes:
-    //   1. Has targets → move toward the next target
-    //   2. No targets but has speed → coast (keep moving in same direction)
-    //      until a new target arrives or shape boundary is hit.
-    //      This prevents stop-start between server ticks.
-    const advance = anim.speed * (dtMs / 1000);
-
+    // Advance toward target at constant velocity.
+    // When queue is empty, hold position (don't coast — coasting
+    // overshoots and causes oscillation when the next target
+    // arrives behind the arrow).
     if (anim.targets.length > 0) {
       const target = anim.targets[0]!;
       anim.direction = target >= anim.currentDist ? 1 : -1;
+      const advance = anim.speed * (dtMs / 1000);
 
       if (anim.direction > 0) {
         anim.currentDist = Math.min(anim.currentDist + advance, target);
@@ -305,18 +302,12 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
         anim.currentDist = target;
         anim.targets.shift();
       }
-    } else if (anim.speed > 0.5) {
-      // Coast: no target but vehicle was moving — keep going
-      // in the same direction at the same speed.
-      // Clamp to shape bounds so it doesn't fly off the end.
-      const newDist = anim.currentDist + advance * anim.direction;
-      anim.currentDist = Math.max(0, Math.min(newDist, shape.totalDist));
     }
 
     anim.currentDist = Math.max(0, Math.min(anim.currentDist, shape.totalDist));
 
-    // Trail: follows while moving, fades when truly stopped
-    const isMoving = anim.targets.length > 0 || anim.speed > 0.5;
+    // Trail: follows while moving, fades when stopped
+    const isMoving = anim.targets.length > 0;
     const idealTail = anim.currentDist - (TRAIL_LENGTH_M * anim.direction);
 
     if (anim.direction > 0) {
