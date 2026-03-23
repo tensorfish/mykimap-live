@@ -159,17 +159,17 @@
       }
       #pb-time { font-variant-numeric: tabular-nums; min-width: 60px; text-align: center; }
       #history-btn {
-        position: absolute;
-        bottom: 12px; left: 12px;
-        z-index: 2;
-        background: rgba(0,0,0,0.75);
-        color: #aaa; border: 1px solid rgba(255,255,255,0.15);
-        border-radius: 6px; padding: 6px 14px;
-        cursor: pointer; font-size: 12px;
-        backdrop-filter: blur(8px);
-        pointer-events: auto;
+        background: rgba(255,255,255,0.08);
+        color: #aaa;
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 4px;
+        padding: 3px 10px;
+        cursor: pointer;
+        font-size: 12px;
+        margin-left: 4px;
+        transition: all 0.15s;
       }
-      #history-btn:hover { color: #fff; background: rgba(0,0,0,0.85); }
+      #history-btn:hover { color: #fff; background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.35); }
 
       /* ── Mobile ── */
       @media (max-width: 640px) {
@@ -193,6 +193,7 @@
       <span id="status-label">Loading…</span>
       <span id="status-info" style="color: #aaa"></span>
       <button id="reconnect-btn">Reconnect</button>
+      <button id="history-btn">History</button>
     </div>
 
     <div id="filters">
@@ -223,8 +224,7 @@
       </select>
     </div>
 
-    <!-- History button (shown in live mode) -->
-    <button id="history-btn">History</button>
+
 
     <script type="module" src="/src/main.ts"></script>
   </body>
