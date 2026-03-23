@@ -47,13 +47,16 @@ export function initMap(
 
   map.on("mousemove", (e) => {
     if (!deck) return;
-    const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
-    map.getCanvas().style.cursor = picked?.object?.entityId ? "pointer" : "";
+    try {
+      const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
+      map.getCanvas().style.cursor = picked?.object?.entityId ? "pointer" : "";
+    } catch {}
   });
 
   map.on("click", (e) => {
     if (!deck) return;
-    const picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 });
+    let picked: any;
+    try { picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 }); } catch { return; }
     if (picked?.object?.entityId) {
       const current = getSelectedEntityId();
       selectVehicle(current === picked.object.entityId ? null : picked.object.entityId);
