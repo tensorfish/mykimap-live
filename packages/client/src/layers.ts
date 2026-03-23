@@ -256,11 +256,26 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
       };
     }
 
-    // Advance toward the next target in the queue
+    // Advance toward the next target in the queue.
+    // If multiple targets queued: move at full speed (catching up).
+    // If only one target: ease into it — slow down as we approach,
+    // so the arrow is still moving when the next update arrives.
+    // This eliminates the start-stop-start-stop stutter.
     if (anim.targets.length > 0) {
       const target = anim.targets[0]!;
       anim.direction = target >= anim.currentDist ? 1 : -1;
-      const advance = anim.speed * (dtMs / 1000);
+      const remaining = Math.abs(target - anim.currentDist);
+
+      let advance: number;
+      if (anim.targets.length > 1) {
+        // Multiple targets queued — move at full speed to catch up
+        advance = anim.speed * (dtMs / 1000);
+      } else {
+        // Single target — ease: cover 60% of remaining distance per second.
+        // Arrow always moves but approaches asymptotically.
+        // Minimum 0.5 m/s so it doesn't freeze on tiny distances.
+        advance = Math.max(0.5, remaining * 0.6) * (dtMs / 1000);
+      }
 
       if (anim.direction > 0) {
         anim.currentDist = Math.min(anim.currentDist + advance, target);
@@ -268,8 +283,13 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
         anim.currentDist = Math.max(anim.currentDist - advance, target);
       }
 
-      // Reached target — pop it and move to next
-      if (Math.abs(anim.currentDist - target) < 0.5) {
+      // Only pop when VERY close and more targets are waiting
+      if (remaining < 0.3 && anim.targets.length > 1) {
+        anim.currentDist = target;
+        anim.targets.shift();
+      }
+      // If it's the last target and we're within 1m, snap to it
+      if (remaining < 1 && anim.targets.length === 1) {
         anim.currentDist = target;
         anim.targets.shift();
       }
