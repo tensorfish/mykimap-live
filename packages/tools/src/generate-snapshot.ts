@@ -27,9 +27,10 @@ function arg(name: string, fallback: string): string {
   return idx >= 0 && process.argv[idx + 1] ? process.argv[idx + 1]! : fallback;
 }
 
+const PROJECT_ROOT = process.env.PROJECT_ROOT ?? process.cwd();
 const DATE = arg("date", "2026-03-22");
-const OUTPUT_DIR = arg("output", ".data/snapshots");
-const GTFS_CACHE = arg("gtfs-cache", ".cache/gtfs");
+const OUTPUT_DIR = arg("output", `${PROJECT_ROOT}/.data/snapshots`);
+const GTFS_CACHE = arg("gtfs-cache", `${PROJECT_ROOT}/.cache/gtfs`);
 const VEHICLES_PER_MODE = parseInt(arg("vehicles", "30"), 10);
 const SNAPSHOT_INTERVAL = parseInt(arg("interval", "30"), 10);
 
