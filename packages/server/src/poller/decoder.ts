@@ -68,10 +68,8 @@ export function decodeVehiclePositions(
       speed: 0, // Never provided by Victoria feeds — calculated later
       timestamp: vehicleTimestamp,
       stale: false, // Calculated later based on age
-      shapeDistTraveled: -1, // Set during processSnapshot if shape is matched
-      prevShapeDistTraveled: -1, // Set during processSnapshot
-      shapeId: "", // Set during processSnapshot
-      pathSegment: [], // Set during interpolate
+      shapeDistTraveled: -1,
+      shapeId: "",
     });
   }
 

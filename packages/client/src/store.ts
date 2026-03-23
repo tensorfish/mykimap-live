@@ -1,5 +1,5 @@
 import { Store } from "@tanstack/store";
-import type { WorldState, ClientState, ServiceAlert } from "./types.js";
+import type { WorldState, ClientState } from "./types.js";
 import { tryTransition } from "./state-machine.js";
 
 // ── App state ──
@@ -37,10 +37,6 @@ export function getVehicles() {
 
 export function getAlerts() {
   return store.state.worldState?.alerts ?? [];
-}
-
-export function getTrails(): Record<string, Array<[number, number]>> {
-  return store.state.worldState?.trails ?? {};
 }
 
 export function getSelectedEntityId(): string | null {
@@ -100,36 +96,6 @@ async function fetchRouteShape(tripId: string, routeId: string): Promise<void> {
   } catch {}
 }
 
-/**
- * Apply initial backlog from server (on WS connect).
- * Feeds all ticks into the path queue builder so the client
- * has a continuous animation path before rendering starts.
- */
-export function applyBacklog(
-  backlog: WorldState[],
-  alerts: ServiceAlert[],
-  trails: Record<string, Array<[number, number]>>
-): void {
-  if (backlog.length === 0) return;
-
-  // Apply each tick to the path queue (via the layers module)
-  // The last tick becomes the current worldState for display
-  const last = backlog[backlog.length - 1]!;
-
-  store.setState((prev) => ({
-    ...prev,
-    worldState: { ...last, alerts, trails },
-    lastTickAt: Date.now(),
-    clientState:
-      prev.clientState === "WAITING_FOR_DATA" || prev.clientState === "STALE"
-        ? tryTransition(prev.clientState, "ACTIVE", "Backlog received")
-        : prev.clientState,
-  }));
-
-  // The map's store subscriber + layers.ts will process these ticks
-  // We emit a custom event so the map can feed the backlog into the path queue
-  window.dispatchEvent(new CustomEvent("vehicle-backlog", { detail: { backlog } }));
-}
 
 export function applyTick(worldState: WorldState): void {
   store.setState((prev) => ({

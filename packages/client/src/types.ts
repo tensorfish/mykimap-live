@@ -29,10 +29,7 @@ export interface VehiclePosition {
   timestamp: number;
   stale: boolean;
   shapeDistTraveled: number;
-  prevShapeDistTraveled: number;
   shapeId: string;
-  /** Route geometry between prev and current tick position: [lon, lat][] */
-  pathSegment: Array<[number, number]>;
 }
 
 export interface ServiceAlert {
@@ -53,8 +50,6 @@ export interface ServiceAlert {
 export interface WorldState {
   timestamp: number;
   vehicles: VehiclePosition[];
-  /** Server-side trails: entityId → array of [lon, lat] (most recent last) */
-  trails: Record<string, Array<[number, number]>>;
   alerts: ServiceAlert[];
   serverState: ServerState;
   seq: number;

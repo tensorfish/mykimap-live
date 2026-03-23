@@ -87,7 +87,7 @@ function feedCurrentSnapshot(): void {
   applyTick({
     timestamp: snap.timestamp,
     vehicles: snap.vehicles,
-    trails: {}, alerts: [],
+    alerts: [],
     serverState: "RUNNING", seq: idx,
   });
 }
@@ -189,9 +189,7 @@ export async function loadDay(date: string): Promise<boolean> {
           timestamp: Number(row.vehicle_ts ?? ts),
           stale: false,
           shapeDistTraveled: -1,
-          prevShapeDistTraveled: -1,
           shapeId: "",
-          pathSegment: [],
         };
       });
       return { timestamp: ts, vehicles };

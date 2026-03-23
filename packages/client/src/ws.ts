@@ -1,4 +1,4 @@
-import { transition, applyTick, applyBacklog } from "./store.js";
+import { transition, applyTick } from "./store.js";
 import type { WorldState } from "./types.js";
 
 const STALE_THRESHOLD_MS = 5_000;
@@ -54,8 +54,11 @@ export function connect(): void {
       const msg = JSON.parse(event.data as string);
 
       if (msg.type === "init") {
-        // Initial backlog: array of recent ticks to build the path queue
-        applyBacklog(msg.backlog as WorldState[], msg.alerts, msg.trails);
+        // Initial backlog — emit event for the map to process
+        window.dispatchEvent(new CustomEvent("vehicle-backlog", { detail: { backlog: msg.backlog } }));
+        // Apply the last tick as current state
+        const backlog = msg.backlog as WorldState[];
+        if (backlog.length > 0) applyTick(backlog[backlog.length - 1]!);
       } else if (msg.type === "tick") {
         // Regular tick: append to path queue
         applyTick(msg as WorldState);
