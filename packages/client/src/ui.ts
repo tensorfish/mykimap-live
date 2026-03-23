@@ -32,17 +32,15 @@ export function initStatusBar(): void {
 
   btn.addEventListener("click", reconnect);
 
-  // Update every 500ms so the "ago" text stays fresh
-  let lastState = "";
   function update() {
-    const { clientState, worldState, lastTickAt } = store.state;
+    const { clientState, worldState } = store.state;
 
     dot.style.backgroundColor = STATE_COLORS[clientState];
     label.textContent = STATE_LABELS[clientState];
 
     if (clientState === "ACTIVE" && worldState) {
       // Count per mode
-      info.textContent = lastTickAt > 0 ? timeAgo(lastTickAt) : "";
+      info.textContent = "";
     } else {
       info.textContent = "";
     }
@@ -51,15 +49,4 @@ export function initStatusBar(): void {
   }
 
   store.subscribe(update);
-  setInterval(update, 500);
-}
-
-function timeAgo(timestampMs: number): string {
-  const seconds = Math.floor((Date.now() - timestampMs) / 1000);
-  if (seconds < 60) return `updated ${seconds} second${seconds !== 1 ? "s" : ""} ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `updated ${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
-  const hours = Math.floor(minutes / 60);
-  const remMin = minutes % 60;
-  return `updated ${hours} hour${hours !== 1 ? "s" : ""} ${remMin} minute${remMin !== 1 ? "s" : ""} ago`;
 }
