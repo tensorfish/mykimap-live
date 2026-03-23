@@ -129,11 +129,23 @@ export async function exportParquet(dateStr: string): Promise<string | null> {
 
   const exportPath = join(config.recordingDataDir, `${dateStr}.parquet`);
 
+  // If parquet already exists and it's not today (today's DB is still being written to),
+  // serve the cached export
+  const today = melbourneDate();
+  if (existsSync(exportPath) && dateStr !== today) {
+    return exportPath;
+  }
+
   try {
-    const exportDb = await openDbAsync(path);
-    const conn = exportDb.connect();
-    await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
-    // Don't close — Bun crashes. Process exit cleans up.
+    // For today's date, use the active DB connection (it holds the WAL lock)
+    if (dateStr === today && db) {
+      const conn = db.connect();
+      await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
+    } else {
+      const exportDb = await openDbAsync(path);
+      const conn = exportDb.connect();
+      await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
+    }
     return exportPath;
   } catch (error) {
     log("error", `Parquet export failed for ${dateStr}: ${error}`);
