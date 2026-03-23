@@ -35,6 +35,7 @@ interface MemorySnapshot {
 
 let allSnapshots: MemorySnapshot[] = [];
 let lastFedIdx = -1;
+let loadAbort: AbortController | null = null;
 
 /**
  * Per-vehicle movement timeline: only the timestamps where
@@ -166,17 +167,23 @@ async function initDuckDB(): Promise<void> {
 // ── Load day ──
 
 export async function loadDay(date: string): Promise<boolean> {
+  // Cancel any in-flight load
+  if (loadAbort) loadAbort.abort();
+  loadAbort = new AbortController();
+  const signal = loadAbort.signal;
+
   try {
     playback.loading = true;
     playback.loadingProgress = "Initializing...";
     notify();
 
     await initDuckDB();
+    if (signal.aborted) return false;
 
     playback.loadingProgress = "Downloading snapshot...";
     notify();
 
-    const resp = await fetch(`/data/snapshots/${date}`);
+    const resp = await fetch(`/data/snapshots/${date}`, { signal });
     if (!resp.ok) { playback.loading = false; notify(); return false; }
 
     const contentLength = parseInt(resp.headers.get("content-length") || "0", 10);
@@ -186,6 +193,7 @@ export async function loadDay(date: string): Promise<boolean> {
     const chunks: Uint8Array[] = [];
     let received = 0;
     while (true) {
+      if (signal.aborted) { reader.cancel(); return false; }
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
@@ -199,6 +207,8 @@ export async function loadDay(date: string): Promise<boolean> {
     const buffer = new Uint8Array(received);
     let offset = 0;
     for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.length; }
+
+    if (signal.aborted) return false;
 
     playback.loadingProgress = "Loading recording...";
     notify();
@@ -260,7 +270,10 @@ export async function loadDay(date: string): Promise<boolean> {
       const pct = totalRows > 0 ? Math.floor((rowCount / totalRows) * 100) : 0;
       playback.loadingProgress = `Reading data... ${pct}%`;
       notify();
-      if (bi % 4 === 0) await new Promise((r) => setTimeout(r, 0));
+      if (bi % 4 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+        if (signal.aborted) { await conn.close(); return false; }
+      }
     }
 
     await conn.close();
@@ -300,6 +313,7 @@ export async function loadDay(date: string): Promise<boolean> {
         playback.loadingProgress = `Preparing timelines... ${Math.floor((si / allSnapshots.length) * 100)}%`;
         notify();
         await new Promise((r) => setTimeout(r, 0));
+        if (signal.aborted) return false;
       }
     }
 
@@ -322,6 +336,12 @@ export async function loadDay(date: string): Promise<boolean> {
     notify();
     return true;
   } catch (error) {
+    // Don't show error modal if user cancelled
+    if (error instanceof DOMException && error.name === "AbortError") {
+      playback.loading = false;
+      notify();
+      return false;
+    }
     showError("Failed to load recording", error);
     playback.loading = false;
     playback.loadingProgress = "";
@@ -411,8 +431,12 @@ export function pause(): void {
 }
 
 export function stopPlayback(): void {
+  // Abort any in-flight download/processing
+  if (loadAbort) { loadAbort.abort(); loadAbort = null; }
+
   playback.active = false;
   playback.playing = false;
+  playback.loading = false;
   allSnapshots = [];
   vehicleTimelines.clear();
   lastFedIdx = -1;

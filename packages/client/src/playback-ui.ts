@@ -92,8 +92,17 @@ export function initPlaybackUI(): void {
 
   playBtn.addEventListener("click", () => {
     const state = getPlaybackState();
-    if (state.playing) { pause(); sounds.pause(); }
-    else { play(); sounds.play(); }
+    if (state.playing) {
+      pause();
+      sounds.pause();
+    } else {
+      // If playback reached the end, restart from the beginning
+      if (state.currentTimestamp >= state.maxTimestamp) {
+        seekTo(state.minTimestamp);
+      }
+      play();
+      sounds.play();
+    }
   });
 
   backBtn.addEventListener("click", () => {

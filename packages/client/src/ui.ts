@@ -1,6 +1,7 @@
 import { store } from "./store.js";
 import { reconnect } from "./ws.js";
 import { isMuted, toggleMuted, sounds } from "./audio.js";
+import { getPlaybackState } from "./playback.js";
 import type { ClientState } from "./types.js";
 
 const STATE_LABELS: Record<ClientState, string> = {
@@ -47,17 +48,19 @@ export function initStatusBar(): void {
     if (!isMuted()) sounds.select();
   });
 
-  // Connection state sounds
+  // Connection state sounds (only in live mode, not during playback)
   let prevClientState: ClientState = "LOADING";
   store.subscribe(() => {
     const { clientState } = store.state;
     if (clientState !== prevClientState) {
-      if (clientState === "ACTIVE" && prevClientState !== "LOADING") {
-        sounds.connect();
-      } else if (clientState === "DISCONNECTED") {
-        sounds.disconnect();
-      } else if (clientState === "RECONNECTING") {
-        sounds.reconnecting();
+      if (!getPlaybackState().active) {
+        if (clientState === "ACTIVE" && prevClientState !== "LOADING") {
+          sounds.connect();
+        } else if (clientState === "DISCONNECTED") {
+          sounds.disconnect();
+        } else if (clientState === "RECONNECTING") {
+          sounds.reconnecting();
+        }
       }
       prevClientState = clientState;
     }
