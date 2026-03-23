@@ -16,7 +16,7 @@ export function initPlaybackUI(): void {
   const statusEl = document.getElementById("status")!;
   const playbackEl = document.getElementById("playback")!;
   const closeBtn = document.getElementById("pb-close")!;
-  const dateSelect = document.getElementById("pb-date")! as HTMLSelectElement;
+  const dateSelect = document.getElementById("pb-date")! as HTMLInputElement;
   const playBtn = document.getElementById("pb-play")!;
   const slider = document.getElementById("pb-slider")! as HTMLInputElement;
   const timeLabel = document.getElementById("pb-time")!;
@@ -30,6 +30,9 @@ export function initPlaybackUI(): void {
     loadingOverlay.classList.remove("visible");
     exitPlayback();
   });
+
+  // Available dates cache
+  let availableDates: Set<string> = new Set();
 
   // History button
   historyBtn.addEventListener("click", async () => {
@@ -46,9 +49,11 @@ export function initPlaybackUI(): void {
       return;
     }
 
-    dateSelect.innerHTML = dates
-      .map((d) => `<option value="${d}">${d}</option>`)
-      .join("");
+    availableDates = new Set(dates);
+
+    // Set date picker range and value
+    dateSelect.min = dates[0]!;
+    dateSelect.max = dates[dates.length - 1]!;
     dateSelect.value = dates[dates.length - 1]!;
 
     await enterPlayback(dates[dates.length - 1]!);
@@ -57,7 +62,19 @@ export function initPlaybackUI(): void {
   closeBtn.addEventListener("click", () => exitPlayback());
 
   dateSelect.addEventListener("change", async () => {
-    await enterPlayback(dateSelect.value);
+    const selected = dateSelect.value;
+    if (!availableDates.has(selected)) {
+      // No snapshot for this date — find the nearest available date
+      const sorted = [...availableDates].sort();
+      const nearest = sorted.reduce((best, d) =>
+        Math.abs(new Date(d).getTime() - new Date(selected).getTime()) <
+        Math.abs(new Date(best).getTime() - new Date(selected).getTime()) ? d : best
+      );
+      dateSelect.value = nearest;
+      await enterPlayback(nearest);
+    } else {
+      await enterPlayback(selected);
+    }
   });
 
   playBtn.addEventListener("click", () => {
