@@ -123,8 +123,9 @@ function sliceShape(shape: CachedShape, fromDist: number, toDist: number): Array
 /** Trail length in meters behind the arrow */
 const TRAIL_LENGTH_M = 800;
 
-/** How long after the last update before the trail starts eating itself */
-const TRAIL_EAT_DELAY_MS = 5000;
+/** Speed at which the trail fades (shrinks) when the vehicle is stopped.
+ *  In meters per second — slower than the vehicle speed for a gentle fade. */
+const TRAIL_FADE_SPEED = 3; // ~3 m/s = trail disappears over ~4-5 minutes for 800m
 
 interface VehicleAnim {
   currentDist: number;
@@ -324,30 +325,37 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
     // Clamp to shape bounds
     anim.currentDist = Math.max(0, Math.min(anim.currentDist, shape.totalDist));
 
-    // Trail tail follows the arrow, maintaining TRAIL_LENGTH_M behind.
-    // Only "eats itself" if no update for > 5 seconds (genuinely stopped).
+    // Trail tail behavior:
+    // - While moving: tail follows at same speed, maintaining TRAIL_LENGTH_M behind
+    // - While stopped: tail slowly creeps toward the arrow (gentle fade)
+    const isMoving = anim.currentDist !== anim.targetDist;
     const idealTail = anim.currentDist - (TRAIL_LENGTH_M * anim.direction);
-    const now = performance.now();
-    const idleMs = now - anim.lastUpdateAt;
-    const shouldEat = anim.currentDist === anim.targetDist && idleMs > TRAIL_EAT_DELAY_MS;
 
     if (anim.direction > 0) {
-      if (anim.tailDist < idealTail) {
-        anim.tailDist += anim.speed * (dtMs / 1000);
-        anim.tailDist = Math.min(anim.tailDist, idealTail);
-      }
-      if (shouldEat && anim.tailDist < anim.currentDist) {
-        anim.tailDist += anim.speed * (dtMs / 1000);
-        anim.tailDist = Math.min(anim.tailDist, anim.currentDist);
+      if (isMoving) {
+        // Keep up with the arrow
+        if (anim.tailDist < idealTail) {
+          anim.tailDist += anim.speed * (dtMs / 1000);
+          anim.tailDist = Math.min(anim.tailDist, idealTail);
+        }
+      } else {
+        // Stopped: slowly shrink toward the arrow
+        if (anim.tailDist < anim.currentDist) {
+          anim.tailDist += TRAIL_FADE_SPEED * (dtMs / 1000);
+          anim.tailDist = Math.min(anim.tailDist, anim.currentDist);
+        }
       }
     } else {
-      if (anim.tailDist > idealTail) {
-        anim.tailDist -= anim.speed * (dtMs / 1000);
-        anim.tailDist = Math.max(anim.tailDist, idealTail);
-      }
-      if (shouldEat && anim.tailDist > anim.currentDist) {
-        anim.tailDist -= anim.speed * (dtMs / 1000);
-        anim.tailDist = Math.max(anim.tailDist, anim.currentDist);
+      if (isMoving) {
+        if (anim.tailDist > idealTail) {
+          anim.tailDist -= anim.speed * (dtMs / 1000);
+          anim.tailDist = Math.max(anim.tailDist, idealTail);
+        }
+      } else {
+        if (anim.tailDist > anim.currentDist) {
+          anim.tailDist -= TRAIL_FADE_SPEED * (dtMs / 1000);
+          anim.tailDist = Math.max(anim.tailDist, anim.currentDist);
+        }
       }
     }
     anim.tailDist = Math.max(0, Math.min(anim.tailDist, shape.totalDist));
