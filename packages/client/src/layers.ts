@@ -177,7 +177,7 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
 
     anims.set(entityId, {
       currentDist: startDist,
-      tailDist: startDist - (TRAIL_LENGTH_M * dir),
+      tailDist: startDist, // tail starts AT the arrow — trail builds as the arrow moves
       targets,
       speed: ANIM_SPEED_MS,
       direction: dir,
@@ -212,7 +212,7 @@ export function feedTick(vehicles: VehiclePosition[]): void {
       // New vehicle — place at this position, no targets yet
       anims.set(v.entityId, {
         currentDist: dist,
-        tailDist: dist - TRAIL_LENGTH_M,
+        tailDist: dist, // trail starts at the arrow — builds as it moves
         targets: [],
         speed: ANIM_SPEED_MS,
         direction: 1,
