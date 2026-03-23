@@ -1,6 +1,6 @@
 import { store } from "./store.js";
 import { reconnect } from "./ws.js";
-import type { ClientState } from "./types.js";
+import type { ClientState, TransportMode } from "./types.js";
 
 const STATE_LABELS: Record<ClientState, string> = {
   LOADING: "Loading map…",
@@ -24,10 +24,6 @@ const STATE_COLORS: Record<ClientState, string> = {
   ERROR: "#d9534f",
 };
 
-/**
- * Bind the status bar DOM elements to the store.
- * No framework — just direct DOM updates on store changes.
- */
 export function initStatusBar(): void {
   const dot = document.getElementById("status-dot")!;
   const label = document.getElementById("status-label")!;
@@ -36,25 +32,50 @@ export function initStatusBar(): void {
 
   btn.addEventListener("click", reconnect);
 
-  store.subscribe(() => {
-    const { clientState, worldState } = store.state;
+  // Update every 500ms so the "ago" text stays fresh
+  let lastState = "";
+  function update() {
+    const { clientState, worldState, lastTickAt } = store.state;
 
     dot.style.backgroundColor = STATE_COLORS[clientState];
     label.textContent = STATE_LABELS[clientState];
 
     if (clientState === "ACTIVE" && worldState) {
-      const parts = [`${worldState.vehicles.length} vehicles`];
-      if (worldState.alerts.length > 0) {
-        parts.push(`${worldState.alerts.length} alerts`);
+      // Count per mode
+      const counts: Record<TransportMode, number> = { metro: 0, tram: 0, bus: 0, vline: 0 };
+      for (const v of worldState.vehicles) {
+        counts[v.mode]++;
       }
-      if (worldState.serverState !== "RUNNING") {
-        parts.push(`Server: ${worldState.serverState}`);
+
+      const parts: string[] = [];
+      if (counts.metro > 0) parts.push(`🚆 ${counts.metro}`);
+      if (counts.tram > 0) parts.push(`🚊 ${counts.tram}`);
+      if (counts.bus > 0) parts.push(`🚌 ${counts.bus}`);
+      if (counts.vline > 0) parts.push(`🚂 ${counts.vline}`);
+
+      // Last update
+      if (lastTickAt > 0) {
+        parts.push(`· ${timeAgo(lastTickAt)}`);
       }
-      info.textContent = parts.join(" · ");
+
+      info.textContent = parts.join("  ");
     } else {
       info.textContent = "";
     }
 
     btn.style.display = clientState === "DISCONNECTED" ? "inline-block" : "none";
-  });
+  }
+
+  store.subscribe(update);
+  setInterval(update, 500);
+}
+
+function timeAgo(timestampMs: number): string {
+  const seconds = Math.floor((Date.now() - timestampMs) / 1000);
+  if (seconds < 2) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m ago`;
 }
