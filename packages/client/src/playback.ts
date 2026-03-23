@@ -206,29 +206,39 @@ export async function loadDay(date: string): Promise<boolean> {
     const conn = await db!.connect();
     await conn.query(`CREATE OR REPLACE VIEW snap AS SELECT * FROM '${date}.parquet'`);
 
-    playback.loadingProgress = "Loading snapshots...";
+    playback.loadingProgress = "Querying rows...";
     notify();
 
     const result = await conn.query(`SELECT * FROM snap ORDER BY timestamp, entity_id`);
     const rows = result.toArray();
+    const totalRows = rows.length;
+
+    playback.loadingProgress = `Grouping ${totalRows.toLocaleString()} rows...`;
+    notify();
 
     const grouped = new Map<number, any[]>();
-    for (const row of rows) {
+    for (let i = 0; i < totalRows; i++) {
+      const row = rows[i]!;
       const ts = Number((row as any).timestamp);
       if (!grouped.has(ts)) grouped.set(ts, []);
       grouped.get(ts)!.push(row);
     }
 
     const sortedTimestamps = [...grouped.keys()].sort((a, b) => a - b);
+    const totalSnaps = sortedTimestamps.length;
     const prevDists = new Map<string, { lat: number; lon: number }>();
 
-    allSnapshots = sortedTimestamps.map((ts) => {
+    playback.loadingProgress = `Building ${totalSnaps.toLocaleString()} snapshots...`;
+    notify();
+
+    allSnapshots = [];
+    for (let si = 0; si < totalSnaps; si++) {
+      const ts = sortedTimestamps[si]!;
       const rawRows = grouped.get(ts)!;
       const vehicles: VehiclePosition[] = rawRows.map((row: any) => {
         const entityId = row.entity_id;
         const lat = row.latitude;
         const lon = row.longitude;
-        const prev = prevDists.get(entityId);
         prevDists.set(entityId, { lat, lon });
 
         return {
@@ -250,19 +260,24 @@ export async function loadDay(date: string): Promise<boolean> {
           shapeId: "",
         };
       });
-      return { timestamp: ts, vehicles };
-    });
+      allSnapshots.push({ timestamp: ts, vehicles });
+
+      if (si % 200 === 0) {
+        playback.loadingProgress = `Building snapshots... ${Math.floor((si / totalSnaps) * 100)}%`;
+        notify();
+        // Yield to the browser so the UI can update
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
 
     await conn.close();
     lastFedIdx = -1;
 
     // Build per-vehicle movement timelines: only positions where the
     // vehicle actually moved (skip duplicates from 30s feed cache).
-    playback.loadingProgress = "Building timelines...";
-    notify();
-
     vehicleTimelines.clear();
-    for (const snap of allSnapshots) {
+    for (let si = 0; si < allSnapshots.length; si++) {
+      const snap = allSnapshots[si]!;
       for (const v of snap.vehicles) {
         let tl = vehicleTimelines.get(v.entityId);
         if (!tl) {
@@ -270,10 +285,15 @@ export async function loadDay(date: string): Promise<boolean> {
           vehicleTimelines.set(v.entityId, tl);
         }
         const last = tl.waypoints[tl.waypoints.length - 1];
-        // Only add if position actually changed (>~10m)
         if (!last || Math.abs(v.latitude - last.lat) > 0.0001 || Math.abs(v.longitude - last.lon) > 0.0001) {
           tl.waypoints.push({ ts: snap.timestamp, lat: v.latitude, lon: v.longitude });
         }
+      }
+
+      if (si % 200 === 0) {
+        playback.loadingProgress = `Building timelines... ${Math.floor((si / allSnapshots.length) * 100)}%`;
+        notify();
+        await new Promise((r) => setTimeout(r, 0));
       }
     }
 
