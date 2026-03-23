@@ -55,7 +55,7 @@ export function initMap(
 
   map.on("click", (e) => {
     if (!deck) return;
-    let picked: any;
+    let picked: { object?: { entityId?: string } } | null = null;
     try { picked = deck.pickObject({ x: e.point.x, y: e.point.y, radius: 10 }); } catch { return; }
     if (picked?.object?.entityId) {
       const current = getSelectedEntityId();
