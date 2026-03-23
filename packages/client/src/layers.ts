@@ -203,23 +203,30 @@ export function seedHeatmap(congestion: SegmentSpeed[], nowTs: number): void {
   }
 }
 
-/** Record a speed observation from a vehicle movement */
-function recordSegmentSpeed(routeId: string, mode: TransportMode, dist: number, speed: number, vehicleTs: number): void {
+/**
+ * Record a speed observation across ALL segments between prevDist and dist.
+ * This fills the gaps — a vehicle traveling 250m in 30s crosses multiple
+ * 200m segments, and all of them should get the speed reading.
+ */
+function recordSegmentSpeed(routeId: string, mode: TransportMode, prevDist: number, dist: number, speed: number, vehicleTs: number): void {
   let route = heatmapData.get(routeId);
   if (!route) {
     route = { mode, segments: new Map() };
     heatmapData.set(routeId, route);
   }
-  const segIdx = Math.max(0, Math.floor(dist / SEGMENT_LEN));
-  let buf = route.segments.get(segIdx);
-  if (!buf) {
-    buf = [];
-    route.segments.set(segIdx, buf);
+  const fromSeg = Math.max(0, Math.floor(Math.min(prevDist, dist) / SEGMENT_LEN));
+  const toSeg = Math.max(0, Math.floor(Math.max(prevDist, dist) / SEGMENT_LEN));
+
+  for (let seg = fromSeg; seg <= toSeg; seg++) {
+    let buf = route.segments.get(seg);
+    if (!buf) {
+      buf = [];
+      route.segments.set(seg, buf);
+    }
+    if (buf.length > 0 && buf[buf.length - 1]!.ts === vehicleTs) continue;
+    buf.push({ ts: vehicleTs, speed });
+    if (buf.length > HEATMAP_MAX_SAMPLES) buf.shift();
   }
-  // Skip duplicate timestamps
-  if (buf.length > 0 && buf[buf.length - 1]!.ts === vehicleTs) return;
-  buf.push({ ts: vehicleTs, speed });
-  if (buf.length > HEATMAP_MAX_SAMPLES) buf.shift();
 }
 
 /** Get average speed for a segment within the sliding window */
@@ -248,6 +255,7 @@ interface VehicleAnim {
   direction: number;
   shapeKey: string;
   lastTs: number; // vehicle timestamp from last feed
+  lastHeatmapDist: number; // previous dist for heatmap segment fill
 }
 
 const anims = new Map<string, VehicleAnim>();
@@ -302,6 +310,7 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
       direction: dir,
       shapeKey: getShapeCacheKey(v),
       lastTs: 0,
+      lastHeatmapDist: startDist,
     });
   }
 }
@@ -330,9 +339,10 @@ export function feedTick(vehicles: VehiclePosition[]): void {
       }
 
       // Record into heatmap when vehicle timestamp changes (actual feed update).
-      // Use the animation speed which accumulates correctly across ticks.
+      // Fill ALL segments between previous and current position.
       if (v.timestamp !== existing.lastTs && existing.lastTs > 0) {
-        recordSegmentSpeed(getShapeCacheKey(v), v.mode, dist, existing.speed, v.timestamp);
+        recordSegmentSpeed(getShapeCacheKey(v), v.mode, existing.lastHeatmapDist, dist, existing.speed, v.timestamp);
+        existing.lastHeatmapDist = dist;
       }
 
       existing.lastTs = v.timestamp;
@@ -346,6 +356,7 @@ export function feedTick(vehicles: VehiclePosition[]): void {
         direction: 1,
         shapeKey: getShapeCacheKey(v),
         lastTs: v.timestamp,
+        lastHeatmapDist: dist,
       });
     }
   }
