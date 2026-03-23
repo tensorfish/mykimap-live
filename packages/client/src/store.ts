@@ -20,6 +20,7 @@ export interface AppState {
   filters: Filters;
   routeFilter: string;
   vehicleFilter: string;
+  heatmapEnabled: boolean;
 }
 
 export const store = new Store<AppState>({
@@ -31,6 +32,7 @@ export const store = new Store<AppState>({
   filters: { metro: true, tram: true, bus: true, vline: true },
   routeFilter: "",
   vehicleFilter: "",
+  heatmapEnabled: false,
 });
 
 // ── Derived selectors ──
@@ -76,6 +78,14 @@ export function setRouteFilter(text: string): void {
 
 export function setVehicleFilter(text: string): void {
   store.setState((prev) => ({ ...prev, vehicleFilter: text }));
+}
+
+export function getHeatmapEnabled(): boolean {
+  return store.state.heatmapEnabled;
+}
+
+export function setHeatmapEnabled(enabled: boolean): void {
+  store.setState((prev) => ({ ...prev, heatmapEnabled: enabled }));
 }
 
 // ── Actions ──

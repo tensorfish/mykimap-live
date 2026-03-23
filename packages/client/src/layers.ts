@@ -142,6 +142,79 @@ const TRAIL_LENGTH_M = 800;
 const TRAIL_FADE_SPEED = 30; // m/s when stopped — 800m trail fades in ~27s
 const ANIM_SPEED_MS = 15; // m/s default animation speed
 
+// ── Congestion heatmap ──
+//
+// Each route shape is divided into segments (SEGMENT_LEN meters each).
+// As vehicles move through segments, their speed is recorded.
+// Segments are colored green → yellow → red by speed.
+// Old readings decay so the heatmap reflects current conditions.
+
+const SEGMENT_LEN = 200; // meters per heatmap segment
+const HEATMAP_DECAY = 0.15; // seconds — time constant for exponential decay
+const HEATMAP_MAX_AGE = 120; // seconds — discard segments with no update in this long
+
+/** Per-route heatmap data */
+interface RouteHeatmap {
+  /** Segment speeds in m/s (NaN = no data) */
+  speeds: Float32Array;
+  /** Last update time per segment (performance.now() in ms) */
+  lastUpdate: Float32Array;
+  segmentCount: number;
+}
+
+const heatmaps = new Map<string, RouteHeatmap>();
+
+/** Mode baseline speeds (m/s) for color normalization */
+const MODE_BASELINE_SPEED: Record<TransportMode, number> = {
+  tram: 8.3,   // ~30 km/h
+  metro: 22,   // ~80 km/h
+  bus: 11,     // ~40 km/h
+  vline: 28,   // ~100 km/h
+};
+
+function getOrCreateHeatmap(shapeKey: string): RouteHeatmap | null {
+  const existing = heatmaps.get(shapeKey);
+  if (existing) return existing;
+  const shape = shapeCache.get(shapeKey);
+  if (!shape || shape.totalDist < SEGMENT_LEN) return null;
+  const segmentCount = Math.ceil(shape.totalDist / SEGMENT_LEN);
+  const speeds = new Float32Array(segmentCount);
+  speeds.fill(NaN);
+  const lastUpdate = new Float32Array(segmentCount);
+  const hm: RouteHeatmap = { speeds, lastUpdate, segmentCount };
+  heatmaps.set(shapeKey, hm);
+  return hm;
+}
+
+/** Record a vehicle's speed at its current position on the route */
+function recordHeatmapSpeed(shapeKey: string, dist: number, speed: number, now: number): void {
+  const hm = getOrCreateHeatmap(shapeKey);
+  if (!hm) return;
+  const segIdx = Math.min(Math.floor(dist / SEGMENT_LEN), hm.segmentCount - 1);
+  if (segIdx < 0) return;
+
+  const prev = hm.speeds[segIdx]!;
+  if (isNaN(prev)) {
+    hm.speeds[segIdx] = speed;
+  } else {
+    // Exponential moving average
+    hm.speeds[segIdx] = prev * 0.7 + speed * 0.3;
+  }
+  hm.lastUpdate[segIdx] = now;
+}
+
+/** Speed ratio (0–1) to RGB color: red → yellow → green */
+function speedToColor(ratio: number): [number, number, number, number] {
+  // ratio: 0 = stopped, 1 = at or above baseline speed
+  const r = Math.min(1, 2 - 2 * ratio);
+  const g = Math.min(1, 2 * ratio);
+  return [Math.floor(r * 255), Math.floor(g * 200), 30, 160];
+}
+
+export function clearHeatmaps(): void {
+  heatmaps.clear();
+}
+
 interface VehicleAnim {
   currentDist: number;
   tailDist: number;
@@ -158,6 +231,7 @@ const anims = new Map<string, VehicleAnim>();
 export function clearAnimations(): void {
   anims.clear();
   snapCache.clear();
+  heatmaps.clear();
 }
 
 // ── Feed data ──
@@ -210,6 +284,7 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
 
 export function feedTick(vehicles: VehiclePosition[]): void {
   const seen = new Set<string>();
+  const now = performance.now();
 
   for (const v of vehicles) {
     seen.add(v.entityId);
@@ -232,6 +307,9 @@ export function feedTick(vehicles: VehiclePosition[]): void {
         if (snapDt > 0 && moveDist > 1) {
           existing.speed = moveDist / snapDt;
         }
+
+        // Record speed into heatmap
+        recordHeatmapSpeed(existing.shapeKey, dist, existing.speed, now);
       }
       existing.lastTs = v.timestamp;
     } else {
@@ -420,6 +498,74 @@ export function createTrailLayer(vehicles: VehiclePosition[], selectedId: string
     },
     widthUnits: "pixels" as const, widthMinPixels: 1, widthMaxPixels: 8,
     capRounded: true, jointRounded: true, pickable: false,
+  });
+}
+
+export function createHeatmapLayer(vehicles: VehiclePosition[]): PathLayer {
+  const now = performance.now();
+  const maxAgeMs = HEATMAP_MAX_AGE * 1000;
+
+  // Collect the set of route shape keys visible on screen
+  const seenKeys = new Set<string>();
+  for (const v of vehicles) {
+    seenKeys.add(getShapeCacheKey(v));
+  }
+
+  // Build per-vehicle mode lookup for baseline speed
+  const keyToMode = new Map<string, TransportMode>();
+  for (const v of vehicles) {
+    const key = getShapeCacheKey(v);
+    if (!keyToMode.has(key)) keyToMode.set(key, v.mode);
+  }
+
+  interface HeatSegment {
+    path: Array<[number, number]>;
+    color: [number, number, number, number];
+  }
+
+  const segments: HeatSegment[] = [];
+
+  for (const key of seenKeys) {
+    const shape = shapeCache.get(key);
+    const hm = heatmaps.get(key);
+    if (!shape || !hm) continue;
+
+    const baseline = MODE_BASELINE_SPEED[keyToMode.get(key) ?? "tram"];
+
+    for (let i = 0; i < hm.segmentCount; i++) {
+      const speed = hm.speeds[i]!;
+      const age = now - hm.lastUpdate[i]!;
+      if (isNaN(speed) || age > maxAgeMs) continue;
+
+      // Fade out old segments
+      const ageFade = Math.max(0, 1 - age / maxAgeMs);
+      const ratio = Math.min(1, speed / baseline);
+      const color = speedToColor(ratio);
+      color[3] = Math.floor(color[3]! * ageFade);
+      if (color[3] < 10) continue;
+
+      // Slice shape for this segment
+      const fromDist = i * SEGMENT_LEN;
+      const toDist = Math.min((i + 1) * SEGMENT_LEN, shape.totalDist);
+      const path = sliceShape(shape, fromDist, toDist);
+      if (path.length < 2) continue;
+
+      segments.push({ path, color });
+    }
+  }
+
+  return new PathLayer({
+    id: "heatmap",
+    data: segments,
+    getPath: (d: HeatSegment) => d.path,
+    getColor: (d: HeatSegment) => d.color,
+    getWidth: 6,
+    widthUnits: "pixels" as const,
+    widthMinPixels: 3,
+    widthMaxPixels: 10,
+    capRounded: true,
+    jointRounded: true,
+    pickable: false,
   });
 }
 

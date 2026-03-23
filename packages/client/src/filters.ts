@@ -1,4 +1,4 @@
-import { store, setFilter, setRouteFilter, setVehicleFilter } from "./store.js";
+import { store, setFilter, setRouteFilter, setVehicleFilter, setHeatmapEnabled } from "./store.js";
 import type { Filters } from "./store.js";
 import type { TransportMode } from "./types.js";
 
@@ -12,6 +12,12 @@ export function initFilters(): void {
 
   let expanded = false;
   const filtersEl = document.getElementById("filters")!;
+  const heatmapCheck = document.getElementById("heatmap-check")! as HTMLInputElement;
+
+  // Heatmap toggle
+  heatmapCheck.addEventListener("change", () => {
+    setHeatmapEnabled(heatmapCheck.checked);
+  });
 
   // Mode chip toggles
   for (const chip of chips) {

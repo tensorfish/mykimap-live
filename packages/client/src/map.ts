@@ -1,8 +1,8 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition, TransportMode } from "./types.js";
-import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, getRouteFilter, getVehicleFilter, selectVehicle } from "./store.js";
-import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
+import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, getRouteFilter, getVehicleFilter, getHeatmapEnabled, selectVehicle } from "./store.js";
+import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, createHeatmapLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
 import { getAnimationSpeedMultiplier, advancePlayback } from "./playback.js";
 
 const INITIAL_VIEW = {
@@ -127,13 +127,20 @@ export function initMap(
         if (v) selectedMode = v.mode;
       }
 
-      deck.setProps({
-        layers: [
-          createRouteShapeLayer(routeShape, selectedMode),
-          createTrailLayer(filtered, selectedId),
-          createVehicleLayer(display, selectedId),
-        ],
-      });
+      const layers: any[] = [
+        createRouteShapeLayer(routeShape, selectedMode),
+      ];
+
+      if (getHeatmapEnabled()) {
+        layers.push(createHeatmapLayer(filtered));
+      }
+
+      layers.push(
+        createTrailLayer(filtered, selectedId),
+        createVehicleLayer(display, selectedId),
+      );
+
+      deck.setProps({ layers });
     }
 
     requestAnimationFrame(renderFrame);

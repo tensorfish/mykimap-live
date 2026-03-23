@@ -99,7 +99,23 @@
       }
       #filter-row input:focus { border-color: rgba(255,255,255,0.35); }
       #filter-row input::placeholder { color: #555; }
-      #filter-count { font-size: 11px; color: #666; align-self: flex-end; }
+      #filter-row-bottom {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      #heatmap-toggle {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: #888;
+        cursor: pointer;
+        user-select: none;
+      }
+      #heatmap-toggle input { cursor: pointer; margin: 0; }
+      #heatmap-toggle:has(input:checked) { color: #fff; }
+      #filter-count { font-size: 11px; color: #666; }
       .chip-count {
         opacity: 0.5;
         font-variant-numeric: tabular-nums;
@@ -352,7 +368,10 @@
       <div id="filter-row" style="display:none">
         <input id="filter-route" type="text" placeholder="Route" spellcheck="false" />
         <input id="filter-vehicle" type="text" placeholder="Vehicle ID" spellcheck="false" />
-        <span id="filter-count"></span>
+        <div id="filter-row-bottom">
+          <label id="heatmap-toggle"><input type="checkbox" id="heatmap-check" />Congestion</label>
+          <span id="filter-count"></span>
+        </div>
       </div>
     </div>
 
