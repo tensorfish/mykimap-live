@@ -43,6 +43,7 @@ export function initFilters(): void {
   // Expand/collapse — lock width on first expand so it doesn't grow
   expandBtn.addEventListener("click", () => {
     expanded = !expanded;
+    sounds.toggle();
     if (expanded) {
       const width = filtersEl.offsetWidth;
       filtersEl.style.width = width + "px";

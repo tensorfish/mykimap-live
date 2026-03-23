@@ -7,6 +7,7 @@ import { initPlaybackUI } from "./playback-ui.js";
 import { connect } from "./ws.js";
 import { transition, selectVehicle, getSelectedEntityId } from "./store.js";
 import { getPlaybackState, play, pause, seekTo } from "./playback.js";
+import { sounds } from "./audio.js";
 
 // Init error modal first so it catches everything
 initErrorModal();
@@ -39,6 +40,7 @@ if (!MAPBOX_TOKEN) {
     legendEl.remove();
   } else {
     document.getElementById("legend-dismiss")!.addEventListener("click", () => {
+      sounds.select();
       legendEl.classList.add("hidden");
       localStorage.setItem("mykimap-legend-seen", "1");
       setTimeout(() => legendEl.remove(), 300);

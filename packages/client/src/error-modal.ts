@@ -2,6 +2,7 @@
  * Global error modal — shows crash details with copy-to-clipboard.
  * Call showError() from any catch block instead of silently swallowing.
  */
+import { sounds } from "./audio.js";
 
 const overlay = () => document.getElementById("error-overlay")!;
 const messageEl = () => document.getElementById("error-message")!;
@@ -44,10 +45,12 @@ export function showError(context: string, error: unknown): void {
 
 export function initErrorModal(): void {
   document.getElementById("error-dismiss")!.addEventListener("click", () => {
+    sounds.select();
     overlay().classList.remove("visible");
   });
 
   document.getElementById("error-copy")!.addEventListener("click", () => {
+    sounds.select();
     navigator.clipboard.writeText(lastErrorText).then(() => {
       const btn = document.getElementById("error-copy")!;
       btn.textContent = "Copied!";

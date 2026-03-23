@@ -32,7 +32,7 @@ export function initStatusBar(): void {
   const btn = document.getElementById("reconnect-btn")! as HTMLButtonElement;
   const soundBtn = document.getElementById("sound-btn")!;
 
-  btn.addEventListener("click", reconnect);
+  btn.addEventListener("click", () => { sounds.select(); reconnect(); });
 
   // Sound toggle — update icon on click
   function updateSoundBtn() {
@@ -43,6 +43,8 @@ export function initStatusBar(): void {
   soundBtn.addEventListener("click", () => {
     toggleMuted();
     updateSoundBtn();
+    // Play a sound after unmuting so user hears confirmation
+    if (!isMuted()) sounds.select();
   });
 
   // Connection state sounds

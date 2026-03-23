@@ -33,6 +33,7 @@ export function initPlaybackUI(): void {
   const loadingBar = document.getElementById("loading-bar")!;
 
   loadingCancel.addEventListener("click", () => {
+    sounds.select();
     stopPlayback();
     loadingOverlay.classList.remove("visible");
     exitPlayback();
@@ -43,6 +44,7 @@ export function initPlaybackUI(): void {
 
   // History button
   historyBtn.addEventListener("click", async () => {
+    sounds.select();
     historyBtn.textContent = "Loading...";
     historyBtn.setAttribute("disabled", "");
 
@@ -67,9 +69,10 @@ export function initPlaybackUI(): void {
     await enterPlayback(dates[dates.length - 1]!);
   });
 
-  closeBtn.addEventListener("click", () => exitPlayback());
+  closeBtn.addEventListener("click", () => { sounds.select(); exitPlayback(); });
 
   dateSelect.addEventListener("change", async () => {
+    sounds.select();
     const selected = dateSelect.value;
     if (!availableDates.has(selected)) {
       // No snapshot for this date — snap to nearest available
@@ -94,11 +97,13 @@ export function initPlaybackUI(): void {
   });
 
   backBtn.addEventListener("click", () => {
+    sounds.select();
     const state = getPlaybackState();
     seekTo(state.currentTimestamp - 15);
   });
 
   fwdBtn.addEventListener("click", () => {
+    sounds.select();
     const state = getPlaybackState();
     seekTo(state.currentTimestamp + 15);
   });
