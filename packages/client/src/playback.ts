@@ -1,12 +1,33 @@
-import * as duckdb from "@duckdb/duckdb-wasm";
-import duckdb_wasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
-import duckdb_worker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
-import { applyTick, setPlaybackActive } from "./store.js";
+/**
+ * Playback engine — YouTube-style streaming.
+ *
+ * Instead of downloading an entire day's Parquet upfront, this fetches
+ * metadata first (slider renders instantly), then loads 30-minute chunks
+ * on demand with prefetch. The buffer bar shows loaded ranges.
+ */
+
+import { applyTick, setPlaybackActive, getHeatmapEnabled } from "./store.js";
 import { clearAnimations, recordHeatmapOnly, clearHeatmapTracker } from "./layers.js";
 import { showError } from "./error-modal.js";
-import type { WorldState, VehiclePosition } from "./types.js";
+import type { VehiclePosition } from "./types.js";
+import {
+  fetchMeta,
+  ensureLoaded,
+  prefetch,
+  resetChunks,
+  cancelFetches,
+  getAbortSignal,
+  getAllSnapshots,
+  getVehicleTimelines,
+  getBufferedRanges,
+  getSnapshotMeta,
+  findSnapshotIndex,
+  isLoaded,
 
-let db: duckdb.AsyncDuckDB | null = null;
+  setCurrentPlaybackTs,
+  type SnapshotMeta,
+  type BufferedRange,
+} from "./playback-chunks.js";
 
 // ── State ──
 
@@ -20,41 +41,28 @@ export interface PlaybackState {
   currentTimestamp: number;
   speed: number;
   playing: boolean;
+  /** Whether we're waiting for a chunk to load (inline buffering, not full-screen) */
+  buffering: boolean;
+  /** Loaded time ranges for the buffer bar */
+  bufferedRanges: BufferedRange[];
 }
 
 let playback: PlaybackState = {
   active: false, loading: false, loadingProgress: "",
   date: "", minTimestamp: 0, maxTimestamp: 0,
   currentTimestamp: 0, speed: 1, playing: false,
+  buffering: false, bufferedRanges: [],
 };
 
-interface MemorySnapshot {
-  timestamp: number;
-  vehicles: VehiclePosition[];
-}
-
-let allSnapshots: MemorySnapshot[] = [];
 let lastFedIdx = -1;
-let loadAbort: AbortController | null = null;
 
 /**
- * Per-vehicle movement timeline: only the timestamps where
- * the vehicle's position actually changed. Built at load time.
- * During playback, we feed upcoming targets from this timeline
- * so the animation queue always has depth.
+ * Generation counter — incremented on every seek or date change.
+ * Async operations (buffer, prefetch) capture the generation at start
+ * and bail out if it changed by the time they complete.
+ * This prevents stale completions from corrupting state.
  */
-interface VehicleTimeline {
-  entityId: string;
-  /** Positions where the vehicle actually moved: [timestamp, lat, lon] */
-  waypoints: Array<{ ts: number; lat: number; lon: number }>;
-  /** Index of the next waypoint to feed */
-  nextIdx: number;
-}
-
-const vehicleTimelines = new Map<string, VehicleTimeline>();
-
-/** How many future waypoints to queue ahead */
-const LOOKAHEAD = 5;
+let seekGeneration = 0;
 
 // ── Listeners ──
 
@@ -67,24 +75,24 @@ export function getPlaybackState(): PlaybackState { return playback; }
 
 /**
  * Animation speed multiplier — used by the SINGLE render loop in map.ts.
- * Live mode: 1. Playback playing: playback.speed. Paused: 0.
+ * Live mode: 1. Playback playing: playback.speed. Paused/buffering: 0.
  */
 export function getAnimationSpeedMultiplier(): number {
   if (!playback.active) return 1;
-  if (!playback.playing) return 0;
+  if (!playback.playing || playback.buffering) return 0;
   return playback.speed;
 }
 
 /**
- * Called every frame by the render loop in map.ts (via advancePlayback).
- * Advances the playback timestamp and feeds new snapshots into the
- * live animation system when crossed. No separate rAF loop.
+ * Called every frame by the render loop in map.ts.
+ * Advances the playback timestamp and feeds snapshots when crossed.
  */
 export function advancePlayback(dtMs: number): void {
-  if (!playback.active || !playback.playing) return;
+  if (!playback.active || !playback.playing || playback.buffering) return;
 
   const cappedDt = Math.min(dtMs, 100);
   playback.currentTimestamp += (cappedDt / 1000) * playback.speed;
+  setCurrentPlaybackTs(playback.currentTimestamp);
 
   if (playback.currentTimestamp >= playback.maxTimestamp) {
     playback.currentTimestamp = playback.maxTimestamp;
@@ -94,11 +102,26 @@ export function advancePlayback(dtMs: number): void {
     return;
   }
 
+  // Check if we're about to run out of loaded data
+  checkPrefetch();
+
+  // Check if we've outrun the buffer
+  if (!isLoaded(playback.currentTimestamp)) {
+    wasPlayingBeforeBuffer = true; // was playing (this is called from advancePlayback)
+    playback.buffering = true;
+    notify();
+    // Trigger loading the needed chunk (capture generation to detect stale completions)
+    const gen = seekGeneration;
+    bufferAndResume(playback.currentTimestamp, gen);
+    return;
+  }
+
   feedCurrentSnapshot();
 
-  // Throttle UI notifications to 10fps (slider update doesn't need 60fps)
+  // Throttle UI notifications to 10fps
   const now = performance.now();
   if (now - lastNotifyTime > 100) {
+    playback.bufferedRanges = getBufferedRanges();
     notify();
     lastNotifyTime = now;
   }
@@ -107,25 +130,83 @@ export function advancePlayback(dtMs: number): void {
 let lastNotifyTime = 0;
 
 /**
- * Feed vehicles with their next timeline waypoints as targets.
- * Instead of feeding raw snapshots (which have duplicate positions
- * from the 30s cache), we look ahead in each vehicle's timeline
- * and feed the NEXT actual position change. This keeps the
- * animation queue full and the movement continuous.
+ * When playback outruns the buffer, load the needed chunk and resume.
+ * `gen` is the seek generation at call time — if it changed by the time
+ * the fetch completes, another seek happened and this result is stale.
+ */
+async function bufferAndResume(timestamp: number, gen: number): Promise<void> {
+  const signal = getAbortSignal();
+  const ok = await ensureLoaded(timestamp, (msg) => {
+    if (seekGeneration !== gen) return; // stale — a new seek superseded us
+    playback.loadingProgress = msg;
+    notify();
+  }, signal);
+
+  // Stale completion — a newer seek or stop happened while we were loading
+  if (seekGeneration !== gen) return;
+
+  if (!ok || !playback.active) {
+    playback.buffering = false;
+    playback.loadingProgress = "";
+    notify();
+    return;
+  }
+
+  playback.buffering = false;
+  playback.loadingProgress = "";
+  playback.bufferedRanges = getBufferedRanges();
+  lastFedIdx = -1; // force re-feed after new data loaded
+
+  // Auto-resume playback after buffer completes
+  if (wasPlayingBeforeBuffer) {
+    playback.playing = true;
+  }
+
+  feedCurrentSnapshot();
+  notify();
+}
+
+/**
+ * Check if we should prefetch the next chunk.
+ * Triggers at ~70% through the current chunk, adjusted for playback speed.
+ */
+let prefetchPromise: Promise<boolean> | null = null;
+
+function checkPrefetch(): void {
+  if (prefetchPromise) return; // already prefetching
+
+  const signal = getAbortSignal();
+  const result = prefetch(playback.currentTimestamp, signal);
+  if (result) {
+    prefetchPromise = result;
+    result.then(() => {
+      prefetchPromise = null;
+      playback.bufferedRanges = getBufferedRanges();
+      notify();
+    }).catch(() => {
+      prefetchPromise = null;
+    });
+  }
+}
+
+/**
+ * Feed the current snapshot into the animation pipeline.
+ * Uses per-vehicle timelines for smooth movement.
  */
 function feedCurrentSnapshot(): void {
-  if (allSnapshots.length === 0) return;
+  const allSnaps = getAllSnapshots();
+  if (allSnaps.length === 0) return;
+
   const idx = findSnapshotIndex(playback.currentTimestamp);
   if (idx === lastFedIdx) return;
   lastFedIdx = idx;
 
-  const snap = allSnapshots[idx]!;
+  const snap = allSnaps[idx]!;
   const ts = playback.currentTimestamp;
+  const timelines = getVehicleTimelines();
 
-  // For each vehicle, advance its timeline index and build a vehicle
-  // with the NEXT waypoint position (where it should be heading).
   const vehicles: VehiclePosition[] = snap.vehicles.map((v) => {
-    const tl = vehicleTimelines.get(v.entityId);
+    const tl = timelines.get(v.entityId);
     if (!tl || tl.waypoints.length === 0) return v;
 
     // Advance timeline index past current playback time
@@ -133,8 +214,6 @@ function feedCurrentSnapshot(): void {
       tl.nextIdx++;
     }
 
-    // Use the current timeline waypoint as the vehicle position
-    // This is the actual moved-to position, not a cache duplicate
     const wp = tl.waypoints[Math.min(tl.nextIdx, tl.waypoints.length - 1)]!;
     return {
       ...v,
@@ -148,279 +227,198 @@ function feedCurrentSnapshot(): void {
     vehicles,
     alerts: [],
     congestion: [],
-    serverState: "RUNNING", seq: idx,
+    serverState: "RUNNING",
+    seq: idx,
   });
-}
-
-// ── DuckDB init ──
-
-async function initDuckDB(): Promise<void> {
-  if (db) return;
-  const bundle = await duckdb.selectBundle({
-    mvp: { mainModule: duckdb_wasm, mainWorker: duckdb_worker },
-  });
-  const worker = new Worker(bundle.mainWorker!);
-  db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
-  await db.instantiate(bundle.mainModule);
-}
-
-// ── Load day ──
-
-export async function loadDay(date: string): Promise<boolean> {
-  // Cancel any in-flight load
-  if (loadAbort) loadAbort.abort();
-  loadAbort = new AbortController();
-  const signal = loadAbort.signal;
-
-  try {
-    playback.loading = true;
-    playback.loadingProgress = "Initializing...";
-    notify();
-
-    await initDuckDB();
-    if (signal.aborted) return false;
-
-    playback.loadingProgress = "Downloading snapshot...";
-    notify();
-
-    const resp = await fetch(`/data/snapshots/${date}`, { signal });
-    if (!resp.ok) { playback.loading = false; notify(); return false; }
-
-    const contentLength = parseInt(resp.headers.get("content-length") || "0", 10);
-    const reader = resp.body?.getReader();
-    if (!reader) { playback.loading = false; notify(); return false; }
-
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-    while (true) {
-      if (signal.aborted) { reader.cancel(); return false; }
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      playback.loadingProgress = contentLength > 0
-        ? `Downloading snapshot... ${Math.floor((received / contentLength) * 100)}%`
-        : `Downloading snapshot... ${(received / 1024).toFixed(0)} KB`;
-      notify();
-    }
-
-    const buffer = new Uint8Array(received);
-    let offset = 0;
-    for (const chunk of chunks) { buffer.set(chunk, offset); offset += chunk.length; }
-
-    if (signal.aborted) return false;
-
-    playback.loadingProgress = "Loading recording...";
-    notify();
-
-    await db!.registerFileBuffer(`${date}.parquet`, buffer);
-    const conn = await db!.connect();
-
-    // Get the time range and total row count without loading all data
-    const metaResult = await conn.query(
-      `SELECT MIN(timestamp) as t_min, MAX(timestamp) as t_max, COUNT(*) as total FROM '${date}.parquet'`
-    );
-    const meta = metaResult.toArray()[0] as any;
-    const tMin = Number(meta.t_min);
-    const tMax = Number(meta.t_max);
-    const totalRows = Number(meta.total);
-
-    if (totalRows === 0 || tMax <= tMin) {
-      await conn.close();
-      playback.loading = false;
-      notify();
-      return false;
-    }
-
-    // Read in time-based chunks to avoid OOM.
-    // Each chunk covers ~10 minutes = ~20 snapshots × ~2000 vehicles = ~40k rows.
-    const CHUNK_SECONDS = 600;
-    const grouped = new Map<number, VehiclePosition[]>();
-    let rowCount = 0;
-
-    for (let chunkStart = tMin; chunkStart <= tMax; chunkStart += CHUNK_SECONDS) {
-      if (signal.aborted) { await conn.close(); return false; }
-
-      const chunkEnd = Math.min(chunkStart + CHUNK_SECONDS, tMax + 1);
-      const chunkResult = await conn.query(
-        `SELECT * FROM '${date}.parquet' WHERE timestamp >= ${chunkStart} AND timestamp < ${chunkEnd} ORDER BY timestamp`
-      );
-
-      for (const batch of chunkResult.batches) {
-        for (let ri = 0; ri < batch.numRows; ri++) {
-          const row = batch.get(ri) as any;
-          const ts = Number(row.timestamp);
-
-          const v: VehiclePosition = {
-            entityId: row.entity_id,
-            mode: row.mode,
-            tripId: row.trip_id ?? "",
-            routeId: row.route_id,
-            startTime: row.start_time ?? "",
-            startDate: row.start_date ?? "",
-            vehicleId: row.vehicle_id,
-            vehicleLabel: row.vehicle_label ?? "",
-            latitude: row.latitude,
-            longitude: row.longitude,
-            bearing: row.bearing,
-            speed: row.speed,
-            timestamp: Number(row.vehicle_ts ?? ts),
-            stale: false,
-            shapeDistTraveled: -1,
-            shapeId: "",
-          };
-
-          let arr = grouped.get(ts);
-          if (!arr) { arr = []; grouped.set(ts, arr); }
-          arr.push(v);
-          rowCount++;
-        }
-      }
-
-      const pct = totalRows > 0 ? Math.floor((rowCount / totalRows) * 100) : 0;
-      playback.loadingProgress = `Reading data... ${pct}%`;
-      notify();
-      await new Promise((r) => setTimeout(r, 0));
-    }
-
-    await conn.close();
-
-    // Build sorted snapshots
-    const sortedTimestamps = [...grouped.keys()].sort((a, b) => a - b);
-    allSnapshots = sortedTimestamps.map((ts) => ({
-      timestamp: ts,
-      vehicles: grouped.get(ts)!,
-    }));
-
-    // Free the grouped map — data now lives in allSnapshots
-    grouped.clear();
-
-    lastFedIdx = -1;
-
-    // Build per-vehicle movement timelines
-    playback.loadingProgress = "Preparing timelines...";
-    notify();
-
-    vehicleTimelines.clear();
-    for (let si = 0; si < allSnapshots.length; si++) {
-      const snap = allSnapshots[si]!;
-      for (const v of snap.vehicles) {
-        let tl = vehicleTimelines.get(v.entityId);
-        if (!tl) {
-          tl = { entityId: v.entityId, waypoints: [], nextIdx: 0 };
-          vehicleTimelines.set(v.entityId, tl);
-        }
-        const last = tl.waypoints[tl.waypoints.length - 1];
-        if (!last || Math.abs(v.latitude - last.lat) > 0.0001 || Math.abs(v.longitude - last.lon) > 0.0001) {
-          tl.waypoints.push({ ts: snap.timestamp, lat: v.latitude, lon: v.longitude });
-        }
-      }
-
-      if (si % 500 === 0) {
-        playback.loadingProgress = `Preparing timelines... ${Math.floor((si / allSnapshots.length) * 100)}%`;
-        notify();
-        await new Promise((r) => setTimeout(r, 0));
-        if (signal.aborted) return false;
-      }
-    }
-
-    if (allSnapshots.length === 0) {
-      playback.loading = false; notify(); return false;
-    }
-
-    playback = {
-      active: true, loading: false, loadingProgress: "",
-      date,
-      minTimestamp: allSnapshots[0]!.timestamp,
-      maxTimestamp: allSnapshots[allSnapshots.length - 1]!.timestamp,
-      currentTimestamp: allSnapshots[0]!.timestamp,
-      speed: 1, playing: false,
-    };
-    setPlaybackActive(true);
-
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
-    const suffix = date === today ? " (updated every 5 min)" : "";
-    playback.loadingProgress = `${allSnapshots.length} snapshots loaded${suffix}`;
-    notify();
-    return true;
-  } catch (error) {
-    // Don't show error modal if user cancelled
-    if (error instanceof DOMException && error.name === "AbortError") {
-      playback.loading = false;
-      notify();
-      return false;
-    }
-    showError("Failed to load recording", error);
-    playback.loading = false;
-    playback.loadingProgress = "";
-    notify();
-    return false;
-  }
-}
-
-// ── Binary search ──
-
-function findSnapshotIndex(ts: number): number {
-  let lo = 0, hi = allSnapshots.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (allSnapshots[mid]!.timestamp <= ts) lo = mid;
-    else hi = mid - 1;
-  }
-  return lo;
 }
 
 // ── Heatmap from historical data ──
 
-const HEATMAP_WINDOW_S = 600; // 10 minutes — must match layers.ts
+const HEATMAP_WINDOW_S = 600;
+let heatmapRebuildTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * Replay snapshots in the 10-minute window before `ts` through feedTick
- * so the heatmap accumulates naturally via the existing shape-snapping
- * and speed calculation code.
+ * Schedule a deferred heatmap rebuild. This is expensive (~60K shape projections)
+ * so we never run it synchronously in the seek path. Instead we defer it
+ * by a short delay so the UI update (vehicle positions) happens first.
+ * Skipped entirely when heatmap is disabled.
  */
+function scheduleBuildHeatmap(ts: number): void {
+  if (heatmapRebuildTimer) clearTimeout(heatmapRebuildTimer);
+  if (!getHeatmapEnabled()) return;
+
+  heatmapRebuildTimer = setTimeout(() => {
+    heatmapRebuildTimer = null;
+    buildHeatmapForTime(ts);
+  }, 50);
+}
+
 function buildHeatmapForTime(ts: number): void {
-  if (allSnapshots.length === 0) return;
+  const allSnaps = getAllSnapshots();
+  if (allSnaps.length === 0) return;
 
   const windowStart = ts - HEATMAP_WINDOW_S;
   const startIdx = findSnapshotIndex(windowStart);
   const endIdx = findSnapshotIndex(ts);
 
-  // Use heatmap-only recorder — doesn't touch animation state
   clearHeatmapTracker();
   for (let i = startIdx; i <= endIdx; i++) {
-    const snap = allSnapshots[i]!;
+    const snap = allSnaps[i]!;
     if (snap.timestamp < windowStart) continue;
     recordHeatmapOnly(snap.vehicles);
   }
   clearHeatmapTracker();
 }
 
-// ── Controls ──
+// ── Public API ──
 
-export function seekTo(timestamp: number): void {
-  playback.currentTimestamp = Math.max(playback.minTimestamp, Math.min(timestamp, playback.maxTimestamp));
-  lastFedIdx = -1;
+/**
+ * Load metadata for a date — makes the slider interactive immediately.
+ * Returns the metadata or null if the date has no data.
+ */
+export async function loadMeta(date: string): Promise<SnapshotMeta | null> {
+  seekGeneration++;
+  cancelFetches();
+  resetChunks();
+  const signal = getAbortSignal();
 
-  // Clear animation state so vehicles teleport to the new position
-  // instead of slowly crawling from where they were.
-  clearAnimations();
+  try {
+    const m = await fetchMeta(date, signal);
+    if (!m) return null;
 
-  // Replay 10-min window to rebuild heatmap at the seek position.
-  // Must happen after clearAnimations (which wipes anim state) and
-  // before feedCurrentSnapshot (which sets the current frame).
-  buildHeatmapForTime(playback.currentTimestamp);
+    playback = {
+      active: true,
+      loading: false,
+      loadingProgress: "",
+      date,
+      minTimestamp: m.minTimestamp,
+      maxTimestamp: m.maxTimestamp,
+      currentTimestamp: m.minTimestamp,
+      speed: playback.speed || 10,
+      playing: false,
+      buffering: false,
+      bufferedRanges: [],
+    };
+    setPlaybackActive(true);
+    notify();
+    return m;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return null;
+    showError("Failed to load recording metadata", error);
+    return null;
+  }
+}
 
-  // Reset all timeline indices to match the seek position
-  for (const tl of vehicleTimelines.values()) {
-    tl.nextIdx = 0;
-    while (tl.nextIdx < tl.waypoints.length - 1 && tl.waypoints[tl.nextIdx]!.ts <= playback.currentTimestamp) {
-      tl.nextIdx++;
-    }
+/**
+ * Load the chunk containing `timestamp` and prepare for playback.
+ * This is the "press play" moment — loads one chunk, not the whole day.
+ */
+export async function loadInitialChunk(timestamp?: number): Promise<boolean> {
+  const ts = timestamp ?? playback.minTimestamp;
+  playback.buffering = true;
+  playback.loadingProgress = "Loading...";
+  notify();
+
+  const signal = getAbortSignal();
+  const ok = await ensureLoaded(ts, (msg) => {
+    playback.loadingProgress = msg;
+    notify();
+  }, signal);
+
+  playback.buffering = false;
+  playback.loadingProgress = "";
+  playback.bufferedRanges = getBufferedRanges();
+
+  if (ok) {
+    playback.currentTimestamp = ts;
+    lastFedIdx = -1;
+    resetTimelineIndices(ts);
+    feedCurrentSnapshot();
   }
 
-  feedCurrentSnapshot();
   notify();
+  return ok;
+}
+
+/** Whether playback was playing before a buffering pause (to auto-resume) */
+let wasPlayingBeforeBuffer = false;
+
+export function seekTo(timestamp: number): void {
+  // Increment generation — invalidates any in-flight buffer/seek
+  seekGeneration++;
+  const gen = seekGeneration;
+
+  playback.currentTimestamp = Math.max(
+    playback.minTimestamp,
+    Math.min(timestamp, playback.maxTimestamp)
+  );
+  setCurrentPlaybackTs(playback.currentTimestamp);
+  lastFedIdx = -1;
+  clearAnimations();
+
+  if (!isLoaded(playback.currentTimestamp)) {
+    // Remember if we were playing so we can resume after buffering
+    if (!playback.buffering) {
+      wasPlayingBeforeBuffer = playback.playing;
+    }
+
+    // Pause playback while buffering
+    playback.buffering = true;
+    playback.loadingProgress = "";
+    notify();
+
+    // Cancel previous in-flight fetches and get a fresh signal
+    cancelFetches();
+    const signal = getAbortSignal();
+
+    ensureLoaded(playback.currentTimestamp, (msg) => {
+      if (seekGeneration !== gen) return; // stale
+      playback.loadingProgress = msg;
+      notify();
+    }, signal).then((ok) => {
+      if (seekGeneration !== gen) return; // stale — a newer seek superseded this one
+
+      playback.buffering = false;
+      playback.loadingProgress = "";
+      playback.bufferedRanges = getBufferedRanges();
+      if (ok) {
+        lastFedIdx = -1;
+        resetTimelineIndices(playback.currentTimestamp);
+        feedCurrentSnapshot();
+        scheduleBuildHeatmap(playback.currentTimestamp);
+
+        // Auto-resume if playback was running before the buffer pause
+        if (wasPlayingBeforeBuffer) {
+          playback.playing = true;
+        }
+      }
+      notify();
+    });
+    return;
+  }
+
+  // Data is already loaded — instant seek
+  playback.buffering = false;
+  playback.loadingProgress = "";
+  resetTimelineIndices(playback.currentTimestamp);
+  feedCurrentSnapshot();
+  scheduleBuildHeatmap(playback.currentTimestamp);
+  notify();
+}
+
+function resetTimelineIndices(ts: number): void {
+  const timelines = getVehicleTimelines();
+  for (const tl of timelines.values()) {
+    // Binary search for the first waypoint with ts > target
+    const wps = tl.waypoints;
+    let lo = 0, hi = wps.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (wps[mid]!.ts <= ts) lo = mid + 1;
+      else hi = mid;
+    }
+    tl.nextIdx = lo;
+  }
 }
 
 export function setSpeed(speed: number): void {
@@ -430,6 +428,11 @@ export function setSpeed(speed: number): void {
 
 export function play(): void {
   playback.playing = true;
+  // If current position is not loaded, trigger buffer
+  if (!isLoaded(playback.currentTimestamp)) {
+    playback.buffering = true;
+    bufferAndResume(playback.currentTimestamp, seekGeneration);
+  }
   notify();
 }
 
@@ -439,16 +442,16 @@ export function pause(): void {
 }
 
 export function stopPlayback(): void {
-  // Abort any in-flight download/processing
-  if (loadAbort) { loadAbort.abort(); loadAbort = null; }
-
+  seekGeneration++;
+  cancelFetches();
   playback.active = false;
   playback.playing = false;
   playback.loading = false;
+  playback.buffering = false;
   setPlaybackActive(false);
-  allSnapshots = [];
-  vehicleTimelines.clear();
+  resetChunks();
   lastFedIdx = -1;
+  prefetchPromise = null;
   clearAnimations();
   notify();
 }
@@ -458,5 +461,8 @@ export async function listAvailableDates(): Promise<string[]> {
     const resp = await fetch("/data/snapshots");
     if (!resp.ok) return [];
     return await resp.json();
-  } catch (error) { showError("Failed to list recordings", error); return []; }
+  } catch (error) {
+    showError("Failed to list recordings", error);
+    return [];
+  }
 }

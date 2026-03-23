@@ -86,15 +86,6 @@
       </div>
     </div>
 
-    <div id="loading-overlay">
-      <div id="loading-modal">
-        <div id="loading-spinner"></div>
-        <div id="loading-text">Loading...</div>
-        <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
-        <button id="loading-cancel">Cancel</button>
-      </div>
-    </div>
-
     <div id="panel">
       <button id="panel-close">✕</button>
       <div id="panel-content"></div>
@@ -107,6 +98,7 @@
       <button id="pb-play">▶</button>
       <button id="pb-fwd" title="Forward 15s">+15s</button>
       <div id="pb-slider-wrap">
+        <div id="pb-buffer-bar"><div id="pb-buffer-bar-inner"></div></div>
         <input id="pb-slider" type="range" min="0" max="100" value="0" />
         <div id="pb-slider-marks">
           <span id="pb-mark-start"></span>
@@ -117,10 +109,15 @@
       <span id="pb-time">--:--</span>
       <select id="pb-speed">
         <option value="1">1×</option>
-        <option value="10">10×</option>
-        <option value="60" selected>60×</option>
+        <option value="10" selected>10×</option>
+        <option value="60">60×</option>
         <option value="360">360×</option>
       </select>
+    </div>
+
+    <div id="pb-buffering-overlay">
+      <div id="pb-buffering-spinner"></div>
+      <span id="pb-buffering-text">Buffering...</span>
     </div>
 
     <div id="vehicle-count"></div>

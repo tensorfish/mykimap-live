@@ -109,10 +109,12 @@ packages/client/          Vite frontend (vanilla TS, no framework)
     layers.ts             Vehicle + trail + heatmap rendering, shape cache, animation
     ui.ts                 Status bar DOM bindings
     filters.ts            Mode chips, route/vehicle text filter, congestion toggle
-    playback.ts           DuckDB-WASM playback engine, per-vehicle timelines
-    playback-ui.ts        Playback controls (slider, buttons, speed, date picker)
+    playback.ts           Streaming playback engine, seek, prefetch, speed control
+    playback-chunks.ts    Chunk manager: fetch, DuckDB-WASM decode, evict, buffer tracking
+    playback-ui.ts        Playback controls (slider, buffer bar, date picker, speed)
     panel.ts              Vehicle info panel (click-to-select)
-    styles.css            All CSS (extracted from index.html)
+    error-modal.ts        Error overlay (copy details, dismiss)
+    styles.css            All CSS
 
 docs/                     VitePress documentation site
   .vitepress/config.ts    VitePress + Mermaid config
@@ -127,7 +129,7 @@ docs/                     VitePress documentation site
 
 | Constant | Value | Defined in |
 |---|---|---|
-| Poll interval | 7s | `config.ts` → `POLL_INTERVAL_MS` |
+| Poll interval | 15s | `config.ts` → `POLL_INTERVAL_MS` |
 | Broadcast interval | 1s | `config.ts` → `BROADCAST_INTERVAL_MS` |
 | Stale vehicle threshold | 120s | `config.ts` → `STALE_VEHICLE_THRESHOLD_MS` |
 | Client stale threshold | 5s | `ws.ts` → `STALE_THRESHOLD_MS` |

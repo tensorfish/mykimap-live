@@ -1,6 +1,6 @@
 # Future: Time Machine (Route Playback)
 
-Status: **Not implemented.** This document defines the feature and the architectural seams that must exist to support it.
+Status: **Implemented.** YouTube-style streaming playback with chunked loading. Metadata loads instantly, 30-minute chunks stream on demand, buffer bar shows loaded ranges.
 
 ---
 
@@ -70,25 +70,30 @@ CREATE TABLE snapshots (
 - **Non-blocking:** The insert is fire-and-forget with error logging. Poll/broadcast must not wait on slow disk.
 - **Optional:** Controlled by `RECORDING_ENABLED` env var (default: `false`). When disabled, no DuckDB instance is created, zero overhead.
 - **Retention:** Configurable via `RECORDING_RETENTION_DAYS` env var (default: `30`). On startup, delete `.duckdb` files older than the threshold.
-- **Export endpoint:** `GET /data/snapshots/:date` exports a day's data as Parquet for the client to download. DuckDB does this natively: `COPY (SELECT * FROM snapshots) TO '/tmp/export.parquet' (FORMAT PARQUET)`.
+- **Export endpoints:**
+  - `GET /data/snapshots/:date` — full-day Parquet export (still works, used for bulk download)
+  - `GET /data/snapshots/:date?from={ts}&to={ts}` — range-filtered Parquet chunk (~4–13 MB per 30 min). Cached on disk.
+  - `GET /data/snapshots/:date/meta` — metadata (time bounds, snapshot count, available hours). ~1 KB, instant.
 
-### Client: DuckDB-WASM playback
+### Client: DuckDB-WASM streaming playback
 
-The client downloads a Parquet export for a requested day and queries it locally using [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview). All playback queries run in the browser — no server load.
+The client streams 30-minute Parquet chunks on demand using [DuckDB-WASM](https://duckdb.org/docs/api/wasm/overview) — like YouTube buffering video ahead of the playhead. No full-day download required.
 
 **Why DuckDB on both sides:**
 - Server uses DuckDB for append-heavy time-series writes (columnar, compressed, fast batch inserts)
-- Client uses DuckDB-WASM to query the same data with the same SQL
+- Client uses DuckDB-WASM to decode Parquet chunks in the browser
 - Export is a single `COPY TO PARQUET` — no custom serialization
-- Parquet files are static once exported — cacheable by CDN or browser
+- Range chunks are cached on the server — repeat requests are instant
 
-**Playback flow:**
-1. User picks a date → client fetches `GET /data/snapshots/2026-03-22` → receives Parquet file
-2. DuckDB-WASM opens the Parquet file in the browser
-3. Time slider controls a `playbackTimestamp`
-4. On each frame: `SELECT * FROM snap WHERE timestamp = (SELECT MAX(timestamp) FROM snap WHERE timestamp <= ?)`
-5. Map result rows to `VehiclePosition[]` → construct `WorldState` → feed `applyTick()`
-6. Same store → same layers → same rendering. Live and playback are indistinguishable.
+**Playback flow (YouTube-style):**
+1. User picks a date → client fetches `GET /data/snapshots/2026-03-22/meta` (~1 KB) → slider renders instantly
+2. User presses play → client fetches first 30-minute chunk (`?from=&to=`) → ~4–13 MB
+3. Chunk manager (`playback-chunks.ts`) registers chunk in DuckDB-WASM, decodes to snapshots + timelines
+4. Vehicles appear and start moving within seconds
+5. While playing, prefetch next chunk in background
+6. If playback outruns buffer → inline "Buffering..." on playback bar (not full-screen modal)
+7. Buffer bar on slider shows loaded ranges (like YouTube's gray bar)
+8. Old chunks evicted (LRU, max 4 loaded) to bound memory at ~20–50 MB
 
 **Key constraint:** `applyTick()` and the rendering pipeline must not care whether the data came from a live WebSocket tick or a historical DuckDB query. Same `WorldState` shape, same code path.
 
@@ -134,38 +139,31 @@ RECORDING_DATA_DIR=.data/snapshots
 
 ## Implementation phases
 
-### Phase A: Server-side DuckDB recording
-- Add `duckdb` dependency to server
-- Add `recorder/` module: init DuckDB, create table, batch insert after each poll
-- Add `RECORDING_ENABLED`, `RECORDING_RETENTION_DAYS`, `RECORDING_DATA_DIR` env vars
-- Add retention cleanup on startup (delete old `.duckdb` files)
-- Non-fatal: if DuckDB init fails, log warning and continue without recording
-- No client changes
+### Phase A: Server-side DuckDB recording ✅
+- `recorder/` module: init DuckDB, create table, batch insert after each poll
+- `RECORDING_ENABLED`, `RECORDING_RETENTION_DAYS`, `RECORDING_DATA_DIR` env vars
+- Retention cleanup on startup. Non-fatal if DuckDB init fails.
+- Auto-export today's Parquet every 5 minutes.
 
-**Validation:** Enable recording, run server for 5 minutes. `.data/snapshots/YYYY-MM-DD.duckdb` exists. Query it with `duckdb` CLI: `SELECT COUNT(*) FROM snapshots` returns > 0. `SELECT COUNT(DISTINCT timestamp) FROM snapshots` shows ~20 distinct timestamps (5 min ÷ 15s). Disable recording, restart — no `.duckdb` file created.
+### Phase B: Parquet export endpoints ✅
+- `GET /data/snapshots` — list available dates
+- `GET /data/snapshots/:date` — full-day Parquet export
+- `GET /data/snapshots/:date?from={ts}&to={ts}` — range-filtered chunk export (cached on disk)
+- `GET /data/snapshots/:date/meta` — metadata (time bounds, snapshot count, hours with data)
 
-### Phase B: Parquet export endpoint
-- Add `GET /data/snapshots/:date` to server HTTP routes
-- Handler runs `COPY TO PARQUET`, streams the file to the client
-- Add `GET /data/snapshots` to list available dates
-- Cache exported Parquet files (avoid re-exporting the same day repeatedly)
+### Phase C: YouTube-style streaming playback ✅
+- Metadata-first: slider renders instantly from ~1 KB metadata response
+- 30-minute chunks loaded on demand via DuckDB-WASM (~4–13 MB each)
+- Chunk manager (`playback-chunks.ts`): fetch, register, decode, evict (LRU, max 4)
+- Prefetch next chunk while playing
+- Inline "Buffering..." indicator (not full-screen modal)
+- Buffer bar on slider showing loaded ranges (YouTube-style gray bar)
+- Seek to unloaded time → brief inline buffer → resume
 
-**Validation:** `curl http://localhost:3000/data/snapshots/2026-03-22 -o day.parquet`. Open with `duckdb`: `SELECT COUNT(*) FROM 'day.parquet'` returns rows. `curl http://localhost:3000/data/snapshots` returns a JSON array of available dates.
+### Phase D: Day compression / timelapse ✅
+- Playback speed: 1×, 10×, 60×, 360× (1 second = 6 minutes at 360×)
+- Default speed: 10×
 
-### Phase C: Client-side DuckDB-WASM playback
-- Add `@duckdb/duckdb-wasm` to client dependencies
-- Add date picker UI
-- Add time slider UI (scrubber bar at bottom of screen)
-- Add playback engine: fetch Parquet → init DuckDB-WASM → query by timestamp → map to `WorldState` → `applyTick()`
-- Toggle between live mode and playback mode (mutually exclusive — live WS pauses during playback)
-- Trail rendering works automatically (store already tracks positions)
-
-**Validation:** Pick a recorded day. Drag the time slider — vehicles jump to their historical positions. Hit play — vehicles animate through the day. Switch back to live mode — WebSocket reconnects, live data resumes.
-
-### Phase D: Day compression / timelapse
-- "Play day" button: compress 24h into configurable duration
-- Playback speed: 1×, 10×, 60×, 360× (1 second = 1 hour)
-- Progress bar showing time-of-day with sunrise/sunset markers
-- Vehicle count graph overlay (mini sparkline showing network activity over the day)
-
-**Validation:** Play a full day at 360×. 24h completes in ~4 minutes. The morning rush is visible as a burst of arrows. Late night shows a sparse network. Vehicle count sparkline peaks match rush hours.
+### Future
+- Vehicle count sparkline overlay showing network activity over the day
+- Sunrise/sunset markers on the timeline

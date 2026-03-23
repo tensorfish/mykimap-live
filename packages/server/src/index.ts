@@ -5,7 +5,7 @@ import { poll } from "./poller/index.js";
 import { processSnapshot, interpolate } from "./interpolation/index.js";
 import { addClient, removeClient, broadcast, clientCount, closeAllClients } from "./broadcast/index.js";
 import { loadShapes, shapeStats, getShapeForTrip, getShapeForRoute } from "./shapes/index.js";
-import { initRecorder, recordSnapshot, closeRecorder, listRecordingDates, exportParquet } from "./recorder/index.js";
+import { initRecorder, recordSnapshot, closeRecorder, listRecordingDates, exportParquet, getSnapshotMeta, exportParquetRange } from "./recorder/index.js";
 import { recordCongestion, getCongestion } from "./congestion/index.js";
 import { log } from "./logger.js";
 import type { VehiclePosition, ServiceAlert, WorldState } from "./types.js";
@@ -302,13 +302,45 @@ function startServer(): void {
         return withCors(Response.json(dates));
       }
 
-      // Snapshot Parquet export
+      // Snapshot metadata (lightweight — no Parquet export)
+      if (url.pathname.match(/^\/data\/snapshots\/\d{4}-\d{2}-\d{2}\/meta$/)) {
+        const dateStr = url.pathname.slice("/data/snapshots/".length, -"/meta".length);
+        const meta = await getSnapshotMeta(dateStr);
+        if (!meta) {
+          return withCors(new Response("Not found", { status: 404 }));
+        }
+        const resp = Response.json(meta);
+        // Today's meta changes as data arrives; past dates are immutable
+        const today = new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
+        resp.headers.set("Cache-Control", dateStr === today ? "no-cache" : "public, max-age=86400");
+        return withCors(resp);
+      }
+
+      // Snapshot Parquet export (full day or time-range chunk)
       if (url.pathname.startsWith("/data/snapshots/")) {
         const dateStr = url.pathname.slice("/data/snapshots/".length);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
           return withCors(new Response("Invalid date format", { status: 400 }));
         }
-        const parquetPath = await exportParquet(dateStr);
+
+        const fromParam = url.searchParams.get("from");
+        const toParam = url.searchParams.get("to");
+
+        let parquetPath: string | null;
+
+        if (fromParam && toParam) {
+          // Range-filtered chunk export
+          const from = parseInt(fromParam, 10);
+          const to = parseInt(toParam, 10);
+          if (isNaN(from) || isNaN(to) || to <= from) {
+            return withCors(new Response("Invalid from/to range", { status: 400 }));
+          }
+          parquetPath = await exportParquetRange(dateStr, from, to);
+        } else {
+          // Full day export (existing behaviour)
+          parquetPath = await exportParquet(dateStr);
+        }
+
         if (!parquetPath) {
           return withCors(new Response("Not found", { status: 404 }));
         }

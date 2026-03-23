@@ -88,19 +88,31 @@ GTFS-RT feed (every ~30s)
   → render: arrows + trails + route shapes
 ```
 
-### Playback mode
+### Playback mode (YouTube-style streaming)
 
 ```
-DuckDB recording (Parquet file)
-  → client loads ALL snapshots into memory
+User picks date
+  → fetch metadata (~1 KB) — slider is interactive immediately
+  → load first 30-min chunk (~4–13 MB Parquet)
+  → chunk manager: register in DuckDB-WASM, decode, build timelines
   → advancePlayback: advance timestamp, feed snapshot when crossed
   → applyTick → store
   → feedTick: clientSnapToShape (raw GPS → shapeDist), update target
   → computeFrame: advance arrow along shape at 60fps × speed multiplier
   → render: arrows + trails + route shapes
+
+While playing:
+  → prefetch next chunk when approaching buffer edge
+  → if playback outruns buffer → inline "Buffering..." (not full-screen modal)
+  → evict old chunks (LRU, max 4 loaded)
+
+Seek to unloaded time:
+  → inline buffer indicator → fetch chunk → resume
 ```
 
-The only difference is the first three steps. Everything from `feedTick` onward is identical.
+Playback does **not** download the entire day's Parquet upfront. The chunk manager (`playback-chunks.ts`) streams 30-minute chunks on demand. A buffer bar on the slider shows loaded ranges (like YouTube's gray bar).
+
+The only difference from live mode is the first steps (metadata → chunk → decode). Everything from `feedTick` onward is identical.
 
 ---
 

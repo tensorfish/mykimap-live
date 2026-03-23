@@ -1,5 +1,5 @@
 import { Store } from "@tanstack/store";
-import type { WorldState, ClientState, SegmentSpeed } from "./types.js";
+import type { WorldState, ClientState } from "./types.js";
 import { tryTransition } from "./state-machine.js";
 import { sounds } from "./audio.js";
 
@@ -12,7 +12,7 @@ export interface Filters {
   vline: boolean;
 }
 
-export interface AppState {
+interface AppState {
   clientState: ClientState;
   worldState: WorldState | null;
   lastTickAt: number;
@@ -40,14 +40,6 @@ export const store = new Store<AppState>({
 
 export function getVehicles() {
   return store.state.worldState?.vehicles ?? [];
-}
-
-export function getAlerts() {
-  return store.state.worldState?.alerts ?? [];
-}
-
-export function getCongestion(): SegmentSpeed[] {
-  return store.state.worldState?.congestion ?? [];
 }
 
 export function getSelectedEntityId(): string | null {

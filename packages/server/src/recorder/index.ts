@@ -2,7 +2,7 @@ import { Database } from "duckdb";
 import { config } from "../config.js";
 import { log } from "../logger.js";
 import type { VehiclePosition } from "../types.js";
-import { existsSync, mkdirSync, readdirSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, unlinkSync, statSync } from "fs";
 import { join } from "path";
 
 // duckdb Node bindings use callbacks. We wrap them in promises.
@@ -195,6 +195,101 @@ export async function exportParquet(dateStr: string): Promise<string | null> {
     return exportPath;
   } catch (error) {
     log("error", `Parquet export failed for ${dateStr}: ${error}`);
+    return null;
+  }
+}
+
+// ── Metadata ──
+
+export interface SnapshotMeta {
+  date: string;
+  minTimestamp: number;
+  maxTimestamp: number;
+  snapshotCount: number;
+  hours: number[];
+}
+
+export async function getSnapshotMeta(dateStr: string): Promise<SnapshotMeta | null> {
+  const path = dbPath(dateStr);
+  if (!existsSync(path)) return null;
+
+  try {
+    // Use the live db for today, open read-only for other dates
+    const today = melbourneDate();
+    let targetDb: any;
+    if (dateStr === today && db) {
+      targetDb = db;
+    } else {
+      targetDb = await openDbAsync(path);
+    }
+
+    const conn = targetDb.connect();
+    const rows = await allAsync(conn, `
+      SELECT
+        MIN(timestamp) as t_min,
+        MAX(timestamp) as t_max,
+        COUNT(DISTINCT timestamp) as snap_count
+      FROM snapshots
+    `);
+
+    if (!rows.length || rows[0].t_min === null) return null;
+
+    const hourRows = await allAsync(conn, `
+      SELECT DISTINCT CAST(
+        EXTRACT(HOUR FROM to_timestamp(CAST(timestamp AS BIGINT)) AT TIME ZONE '${config.timezone}')
+      AS INTEGER) as h
+      FROM snapshots ORDER BY h
+    `);
+
+    return {
+      date: dateStr,
+      minTimestamp: Number(rows[0].t_min),
+      maxTimestamp: Number(rows[0].t_max),
+      snapshotCount: Number(rows[0].snap_count),
+      hours: hourRows.map((r: any) => Number(r.h)),
+    };
+  } catch (error) {
+    log("error", `Failed to get snapshot metadata for ${dateStr}: ${error}`);
+    return null;
+  }
+}
+
+// ── Range export ──
+
+export async function exportParquetRange(
+  dateStr: string,
+  from: number,
+  to: number
+): Promise<string | null> {
+  const path = dbPath(dateStr);
+  if (!existsSync(path)) return null;
+
+  // Build a cache-safe filename: date_from_to.parquet
+  const chunkDir = join(config.recordingDataDir, "chunks");
+  mkdirSync(chunkDir, { recursive: true });
+  const chunkPath = join(chunkDir, `${dateStr}_${from}_${to}.parquet`);
+
+  // Serve cached chunk if it exists and is for a past date (immutable)
+  const today = melbourneDate();
+  if (existsSync(chunkPath)) {
+    // For today's date, only serve cache if it's less than 5 minutes old
+    if (dateStr !== today) return chunkPath;
+    const age = Date.now() - statSync(chunkPath).mtimeMs;
+    if (age < 5 * 60 * 1000) return chunkPath;
+  }
+
+  try {
+    const targetDb = (dateStr === today && db) ? db : await openDbAsync(path);
+    const conn = targetDb.connect();
+    await runAsync(
+      conn,
+      `COPY (SELECT * FROM snapshots WHERE timestamp >= ${from} AND timestamp < ${to} ORDER BY timestamp)
+       TO '${chunkPath}' (FORMAT PARQUET)`
+    );
+    log("debug", `Exported chunk: ${chunkPath}`);
+    return chunkPath;
+  } catch (error) {
+    log("error", `Chunk export failed for ${dateStr} [${from}-${to}]: ${error}`);
     return null;
   }
 }

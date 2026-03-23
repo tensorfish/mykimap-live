@@ -1,6 +1,7 @@
 import {
   listAvailableDates,
-  loadDay,
+  loadMeta,
+  loadInitialChunk,
   play,
   pause,
   seekTo,
@@ -8,6 +9,7 @@ import {
   stopPlayback,
   getPlaybackState,
   onPlaybackChange,
+  type PlaybackState,
 } from "./playback.js";
 import { connect, disconnect } from "./ws.js";
 import { sounds } from "./audio.js";
@@ -27,22 +29,14 @@ export function initPlaybackUI(): void {
   const markMid = document.getElementById("pb-mark-mid")!;
   const markEnd = document.getElementById("pb-mark-end")!;
   const speedSelect = document.getElementById("pb-speed")! as HTMLSelectElement;
-  const loadingOverlay = document.getElementById("loading-overlay")!;
-  const loadingText = document.getElementById("loading-text")!;
-  const loadingCancel = document.getElementById("loading-cancel")!;
-  const loadingBar = document.getElementById("loading-bar")!;
-
-  loadingCancel.addEventListener("click", () => {
-    sounds.select();
-    stopPlayback();
-    loadingOverlay.classList.remove("visible");
-    exitPlayback();
-  });
+  const bufferBarInner = document.getElementById("pb-buffer-bar-inner")!;
+  const bufferingOverlay = document.getElementById("pb-buffering-overlay")!;
+  const bufferingText = document.getElementById("pb-buffering-text")!;
 
   // Available dates cache
   let availableDates: Set<string> = new Set();
 
-  // History button
+  // History button — opens playback mode
   historyBtn.addEventListener("click", async () => {
     sounds.select();
     historyBtn.textContent = "Loading...";
@@ -60,7 +54,6 @@ export function initPlaybackUI(): void {
 
     availableDates = new Set(dates);
 
-    // Set date picker range and value
     dateSelect.min = dates[0]!;
     dateSelect.max = dates[dates.length - 1]!;
     dateSelect.value = dates[dates.length - 1]!;
@@ -75,7 +68,6 @@ export function initPlaybackUI(): void {
     sounds.select();
     const selected = dateSelect.value;
     if (!availableDates.has(selected)) {
-      // No snapshot for this date — snap to nearest available
       const sorted = [...availableDates].sort();
       const nearest = sorted.reduce((best, d) =>
         Math.abs(new Date(d).getTime() - new Date(selected).getTime()) <
@@ -90,12 +82,16 @@ export function initPlaybackUI(): void {
     }
   });
 
-  playBtn.addEventListener("click", () => {
+  playBtn.addEventListener("click", async () => {
     const state = getPlaybackState();
     if (state.playing) {
       pause();
       sounds.pause();
     } else {
+      // If we haven't loaded any data yet, load the initial chunk first
+      if (state.bufferedRanges.length === 0) {
+        await loadInitialChunk(state.currentTimestamp);
+      }
       // If playback reached the end, restart from the beginning
       if (state.currentTimestamp >= state.maxTimestamp) {
         seekTo(state.minTimestamp);
@@ -138,21 +134,13 @@ export function initPlaybackUI(): void {
   onPlaybackChange(() => {
     const state = getPlaybackState();
 
-    // Loading overlay
-    if (state.loading) {
-      loadingOverlay.classList.add("visible");
-      loadingText.textContent = state.loadingProgress;
-      // Extract percentage from progress text (e.g. "Downloading... 45%")
-      const pctMatch = state.loadingProgress.match(/(\d+)%/);
-      loadingBar.style.width = pctMatch ? `${pctMatch[1]}%` : "0%";
-      playBtn.setAttribute("disabled", "");
-      slider.setAttribute("disabled", "");
-      return;
+    // Buffering overlay — visible when waiting for chunk data
+    if (state.buffering) {
+      bufferingOverlay.classList.add("visible");
+      bufferingText.textContent = state.loadingProgress || "Buffering...";
+    } else {
+      bufferingOverlay.classList.remove("visible");
     }
-
-    loadingOverlay.classList.remove("visible");
-    playBtn.removeAttribute("disabled");
-    slider.removeAttribute("disabled");
 
     // Update slider (only if user isn't scrubbing)
     if (!scrubbing) {
@@ -161,6 +149,9 @@ export function initPlaybackUI(): void {
         slider.value = String(((state.currentTimestamp - state.minTimestamp) / range) * 100);
       }
     }
+
+    // Buffer bar — show loaded ranges as segments on the slider
+    updateBufferBar(state);
 
     // Time label + document title
     if (state.active) {
@@ -179,6 +170,9 @@ export function initPlaybackUI(): void {
 
     playBtn.textContent = state.playing ? "⏸" : "▶";
 
+    // Disable play button while initial load hasn't completed (no data at all yet)
+    // But don't disable during buffering (user can still pause)
+
     // Slider time markers
     if (state.active && state.maxTimestamp > state.minTimestamp) {
       const fmt = (ts: number) => new Date(ts * 1000).toLocaleTimeString("en-AU", {
@@ -190,8 +184,28 @@ export function initPlaybackUI(): void {
     }
   });
 
+  function updateBufferBar(state: PlaybackState): void {
+    const range = state.maxTimestamp - state.minTimestamp;
+    if (range <= 0 || state.bufferedRanges.length === 0) {
+      bufferBarInner.innerHTML = "";
+      return;
+    }
+
+    // Build segment elements for each loaded range
+    let html = "";
+    for (const br of state.bufferedRanges) {
+      const left = Math.max(0, ((br.from - state.minTimestamp) / range) * 100);
+      const right = Math.min(100, ((br.to - state.minTimestamp) / range) * 100);
+      const width = right - left;
+      if (width > 0) {
+        html += `<div class="pb-buffer-segment" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"></div>`;
+      }
+    }
+    bufferBarInner.innerHTML = html;
+  }
+
   async function enterPlayback(date: string): Promise<void> {
-    // Stop any existing playback first (clears animation state)
+    // Stop any existing playback first
     stopPlayback();
     disconnect();
 
@@ -199,19 +213,24 @@ export function initPlaybackUI(): void {
     playbackEl.style.display = "flex";
     document.getElementById("vehicle-count")?.classList.add("hidden");
 
-    const ok = await loadDay(date);
-    if (!ok) {
+    // Step 1: Fetch metadata — slider is interactive immediately
+    const meta = await loadMeta(date);
+    if (!meta) {
       exitPlayback();
       return;
     }
 
-    // Sync speed from the UI selector (HTML default may differ from state default)
+    // Sync speed from the UI selector
     setSpeed(parseInt(speedSelect.value, 10));
-    seekTo(getPlaybackState().minTimestamp);
+
+    // Step 2: Load the first chunk in the background
+    // The user can see the slider and time range already
+    await loadInitialChunk(meta.minTimestamp);
   }
 
   function exitPlayback(): void {
     stopPlayback();
+    bufferingOverlay.classList.remove("visible");
     document.title = "Myki Map - Live Melbourne Transport";
     document.getElementById("vehicle-count")?.classList.remove("hidden");
 

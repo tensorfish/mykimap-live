@@ -102,7 +102,7 @@ See [animation-architecture.md](animation-architecture.md) for the full animatio
 ## What's intentionally absent
 
 - **DuckDB on both sides.** Server records raw feed data to daily `.duckdb` files (enabled by default). Client loads Parquet exports via DuckDB-WASM for historical playback.
-- **REST endpoints** for playback: `GET /data/snapshots` lists dates, `GET /data/snapshots/:date` exports Parquet, `GET /api/route-shape/:tripId` returns route geometry.
+- **REST endpoints** for playback: `GET /data/snapshots` lists dates, `GET /data/snapshots/:date` exports full-day Parquet, `GET /data/snapshots/:date?from=&to=` exports a time-range chunk, `GET /data/snapshots/:date/meta` returns metadata (time bounds, available hours), `GET /api/route-shape/:tripId` returns route geometry.
 - **No authentication.** This is a public visualisation tool.
 - **No UI framework.** Vanilla TS + TanStack Store + direct DOM. No React, no virtual DOM.
 

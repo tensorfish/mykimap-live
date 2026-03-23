@@ -13,7 +13,7 @@
 
 All feeds use Protocol Buffer encoding and the `KeyID` header for authentication.
 
-## Poll cycle (every 7 seconds)
+## Poll cycle (every 15 seconds)
 
 ```mermaid
 flowchart LR
@@ -97,21 +97,44 @@ stateDiagram-v2
     DISCONNECTED --> CONNECTING
 ```
 
-## Time machine (implemented)
+## Time machine — YouTube-style streaming playback
 
-DuckDB on both sides. Server records raw feed data, client plays it back.
+DuckDB on both sides. Server records raw feed data, client streams 30-minute chunks on demand.
 
-**Server:** Before `processSnapshot()`, batch-inserts raw GTFS-RT data into DuckDB (`.data/snapshots/YYYY-MM-DD.duckdb`, Melbourne time). `GET /data/snapshots/:date` exports to Parquet.
+### Server endpoints
 
-**Client:** DuckDB-WASM loads the Parquet file into memory. All snapshots parsed into a sorted array. During playback, `advancePlayback()` feeds snapshots into `applyTick()` as the timestamp crosses them. `clientSnapToShape()` snaps raw GPS positions to cached route shapes. The same `feedTick` → `computeFrame` pipeline handles animation, trails, and bearing — identical to live mode.
+| Endpoint | Purpose | Response |
+|---|---|---|
+| `GET /data/snapshots` | List available dates | JSON array of date strings |
+| `GET /data/snapshots/:date/meta` | Day metadata (instant) | `{ minTimestamp, maxTimestamp, snapshotCount, hours }` |
+| `GET /data/snapshots/:date?from=&to=` | 30-min Parquet chunk | ~4–13 MB binary (cached on disk) |
+| `GET /data/snapshots/:date` | Full day Parquet (legacy) | ~150–200 MB binary |
 
-**Single animation pipeline:**
+**Recording:** Before `processSnapshot()`, batch-inserts raw GTFS-RT data into DuckDB (`.data/snapshots/YYYY-MM-DD.duckdb`, Melbourne time).
+
+### Client streaming flow
+
+```mermaid
+flowchart TD
+    DATE["User picks date"] --> META["Fetch metadata\n~1 KB"]
+    META --> SLIDER["Slider interactive\nimmediately"]
+    SLIDER --> PLAY["User presses play"]
+    PLAY --> CHUNK1["Load first\n30-min chunk\n~4-13 MB"]
+    CHUNK1 --> RENDER["Vehicles appear\nand start moving"]
+    RENDER --> PREFETCH["Prefetch next\nchunk in background"]
+    PREFETCH --> SEAMLESS["Seamless\nchunk transition"]
+    SEAMLESS --> EVICT["Evict old chunks\n(LRU, max 4)"]
+```
+
+The chunk manager (`playback-chunks.ts`) tracks loaded ranges, handles fetch + DuckDB-WASM decode, and evicts old chunks. A buffer bar on the slider shows loaded ranges. Seeking to unloaded time shows a brief inline "Buffering..." indicator, not a full-screen modal.
+
+### Single animation pipeline
 
 ```mermaid
 flowchart LR
     subgraph SOURCES["Data Sources"]
         LIVE["WebSocket tick"]
-        PLAY["Playback snapshot"]
+        PLAY["Playback chunk\nsnapshot"]
     end
     SOURCES --> AT["applyTick()"]
     AT --> STORE["TanStack Store"]
@@ -127,7 +150,7 @@ One render loop. One speed multiplier. Zero duplicate animation code.
 
 | Constant | Value |
 |---|---|
-| Feed poll interval | 7s |
+| Feed poll interval | 15s |
 | Broadcast interval | ~1s |
 | Stale vehicle threshold | 120s |
 | Client stale threshold | 5s |
