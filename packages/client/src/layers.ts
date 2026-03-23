@@ -142,11 +142,11 @@ const ANIM_SPEED_MS = 15; // m/s default animation speed
 interface VehicleAnim {
   currentDist: number;
   tailDist: number;
-  /** Queue of target shapeDists to animate through */
   targets: number[];
   speed: number;
   direction: number;
   shapeKey: string;
+  lastTs: number; // vehicle timestamp from last feed
 }
 
 const anims = new Map<string, VehicleAnim>();
@@ -189,11 +189,12 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
 
     anims.set(entityId, {
       currentDist: startDist,
-      tailDist: startDist, // tail starts AT the arrow — trail builds as the arrow moves
+      tailDist: startDist,
       targets,
       speed: ANIM_SPEED_MS,
       direction: dir,
       shapeKey: getShapeCacheKey(v),
+      lastTs: 0,
     });
   }
 }
@@ -209,26 +210,31 @@ export function feedTick(vehicles: VehiclePosition[]): void {
 
     const existing = anims.get(v.entityId);
     if (existing) {
-      // Add new target to the queue
       const lastTarget = existing.targets[existing.targets.length - 1] ?? existing.currentDist;
       if (Math.abs(dist - lastTarget) > 0.5) {
         existing.targets.push(dist);
-        // Update speed from distance between targets
-        const totalQueueDist = Math.abs(dist - existing.currentDist);
-        if (totalQueueDist > 1) {
-          // Aim to cover the queue in ~1 second per target
-          existing.speed = Math.max(ANIM_SPEED_MS, totalQueueDist / Math.max(1, existing.targets.length));
+
+        // Speed = distance to cover / time between this update and the last.
+        // Use vehicle timestamps (not wall clock) for correct playback speed.
+        // dtMs in computeFrame is already multiplied by speed multiplier,
+        // so this speed should be in real m/s.
+        const snapDt = existing.lastTs > 0 ? Math.abs(v.timestamp - existing.lastTs) : 30;
+        const moveDist = Math.abs(dist - lastTarget);
+        if (snapDt > 0 && moveDist > 1) {
+          existing.speed = moveDist / snapDt;
         }
       }
+      existing.lastTs = v.timestamp;
     } else {
       // New vehicle — place at this position, no targets yet
       anims.set(v.entityId, {
         currentDist: dist,
-        tailDist: dist, // trail starts at the arrow — builds as it moves
+        tailDist: dist,
         targets: [],
         speed: ANIM_SPEED_MS,
         direction: 1,
         shapeKey: getShapeCacheKey(v),
+        lastTs: v.timestamp,
       });
     }
   }
@@ -268,26 +274,15 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
       };
     }
 
-    // Advance toward the next target in the queue.
-    // If multiple targets queued: move at full speed (catching up).
-    // If only one target: ease into it — slow down as we approach,
-    // so the arrow is still moving when the next update arrives.
-    // This eliminates the start-stop-start-stop stutter.
+    // Advance toward the next target at constant velocity.
+    // Speed is set by feedTick based on distance / time between updates.
+    // At any playback speed, the arrow moves at a steady pace —
+    // dtMs is already multiplied by the speed multiplier in map.ts.
     if (anim.targets.length > 0) {
       const target = anim.targets[0]!;
       anim.direction = target >= anim.currentDist ? 1 : -1;
       const remaining = Math.abs(target - anim.currentDist);
-
-      let advance: number;
-      if (anim.targets.length > 1) {
-        // Multiple targets queued — move at full speed to catch up
-        advance = anim.speed * (dtMs / 1000);
-      } else {
-        // Single target — ease: cover 60% of remaining distance per second.
-        // Arrow always moves but approaches asymptotically.
-        // Minimum 0.5 m/s so it doesn't freeze on tiny distances.
-        advance = Math.max(0.5, remaining * 0.6) * (dtMs / 1000);
-      }
+      const advance = anim.speed * (dtMs / 1000);
 
       if (anim.direction > 0) {
         anim.currentDist = Math.min(anim.currentDist + advance, target);
@@ -295,13 +290,8 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
         anim.currentDist = Math.max(anim.currentDist - advance, target);
       }
 
-      // Only pop when VERY close and more targets are waiting
-      if (remaining < 0.3 && anim.targets.length > 1) {
-        anim.currentDist = target;
-        anim.targets.shift();
-      }
-      // If it's the last target and we're within 1m, snap to it
-      if (remaining < 1 && anim.targets.length === 1) {
+      // Reached target — pop and continue to next
+      if (Math.abs(anim.currentDist - target) < 0.5) {
         anim.currentDist = target;
         anim.targets.shift();
       }
