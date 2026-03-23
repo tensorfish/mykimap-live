@@ -97,20 +97,24 @@ export async function initRecorder(): Promise<void> {
 
   // Auto-export today's parquet every 5 minutes so clients
   // don't trigger a full export on each request.
-  parquetTimer = setInterval(async () => {
-    try {
-      const today = melbourneDate();
-      if (db && currentDateStr === today) {
-        const exportPath = join(config.recordingDataDir, `${today}.parquet`);
-        const conn = db.connect();
-        await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
-        log("debug", `Auto-exported today's Parquet: ${exportPath}`);
-      }
-    } catch (error) {
-      log("warn", `Auto Parquet export failed: ${error}`);
-    }
-  }, PARQUET_EXPORT_INTERVAL_MS);
+  parquetTimer = setInterval(autoExportToday, PARQUET_EXPORT_INTERVAL_MS);
 }
+
+async function autoExportToday(): Promise<void> {
+  try {
+    const today = melbourneDate();
+    if (db && currentDateStr === today) {
+      const exportPath = join(config.recordingDataDir, `${today}.parquet`);
+      const conn = db.connect();
+      await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
+      log("debug", `Auto-exported today's Parquet: ${exportPath}`);
+    }
+  } catch (error) {
+    log("warn", `Auto Parquet export failed: ${error}`);
+  }
+}
+
+let firstExportDone = false;
 
 export async function recordSnapshot(vehicles: VehiclePosition[], headerTimestamp: number): Promise<void> {
   if (!config.recordingEnabled || !db) return;
@@ -127,6 +131,12 @@ export async function recordSnapshot(vehicles: VehiclePosition[], headerTimestam
 
     conn.run(`INSERT INTO snapshots VALUES ${values}`);
     log("debug", `Recorded ${vehicles.length} vehicles to DuckDB`);
+
+    // Export on first record so today's parquet is available immediately
+    if (!firstExportDone) {
+      firstExportDone = true;
+      autoExportToday();
+    }
   } catch (error) {
     log("error", `DuckDB insert failed: ${error}`);
   }
@@ -157,19 +167,20 @@ export async function exportParquet(dateStr: string): Promise<string | null> {
     return exportPath;
   }
 
-  // No cached file — export now (first request for this date)
+  // Today: don't build on-demand. The 5-min auto-export timer will create it.
+  // Client gets a 404 and can retry later.
+  const today = melbourneDate();
+  if (dateStr === today) {
+    log("info", `No Parquet for today yet — waiting for auto-export timer`);
+    return null;
+  }
+
+  // Past dates: export once on first request, then cached forever.
   try {
-    const today = melbourneDate();
-    if (dateStr === today && db) {
-      log("info", `Exporting today's Parquet using active DB connection`);
-      const conn = db.connect();
-      await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
-    } else {
-      log("info", `Exporting Parquet for ${dateStr} from file`);
-      const exportDb = await openDbAsync(path);
-      const conn = exportDb.connect();
-      await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
-    }
+    log("info", `Exporting Parquet for ${dateStr} from file`);
+    const exportDb = await openDbAsync(path);
+    const conn = exportDb.connect();
+    await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
     log("info", `Parquet exported: ${exportPath}`);
     return exportPath;
   } catch (error) {
