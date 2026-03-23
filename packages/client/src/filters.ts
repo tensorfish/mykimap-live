@@ -13,6 +13,7 @@ export function initFilters(): void {
   let expanded = false;
   const filtersEl = document.getElementById("filters")!;
   const heatmapCheck = document.getElementById("heatmap-check")! as HTMLInputElement;
+  const vehicleCountEl = document.getElementById("vehicle-count")!;
 
   // Heatmap toggle
   heatmapCheck.addEventListener("change", () => {
@@ -106,5 +107,9 @@ export function initFilters(): void {
     }
 
     filterCount.textContent = hasFilter ? `${matchCount} / ${total}` : "";
+
+    // Total vehicle count (bottom-left)
+    const allVehicles = counts.metro + counts.tram + counts.bus + counts.vline;
+    vehicleCountEl.textContent = allVehicles > 0 ? `${allVehicles.toLocaleString()} vehicles` : "";
   });
 }

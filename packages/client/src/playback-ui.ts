@@ -22,6 +22,9 @@ export function initPlaybackUI(): void {
   const fwdBtn = document.getElementById("pb-fwd")!;
   const slider = document.getElementById("pb-slider")! as HTMLInputElement;
   const timeLabel = document.getElementById("pb-time")!;
+  const markStart = document.getElementById("pb-mark-start")!;
+  const markMid = document.getElementById("pb-mark-mid")!;
+  const markEnd = document.getElementById("pb-mark-end")!;
   const speedSelect = document.getElementById("pb-speed")! as HTMLSelectElement;
   const loadingOverlay = document.getElementById("loading-overlay")!;
   const loadingText = document.getElementById("loading-text")!;
@@ -148,6 +151,16 @@ export function initPlaybackUI(): void {
     }
 
     playBtn.textContent = state.playing ? "⏸" : "▶";
+
+    // Slider time markers
+    if (state.active && state.maxTimestamp > state.minTimestamp) {
+      const fmt = (ts: number) => new Date(ts * 1000).toLocaleTimeString("en-AU", {
+        hour: "2-digit", minute: "2-digit", timeZone: "Australia/Melbourne",
+      });
+      markStart.textContent = fmt(state.minTimestamp);
+      markMid.textContent = fmt((state.minTimestamp + state.maxTimestamp) / 2);
+      markEnd.textContent = fmt(state.maxTimestamp);
+    }
   });
 
   async function enterPlayback(date: string): Promise<void> {
