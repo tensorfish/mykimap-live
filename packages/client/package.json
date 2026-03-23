@@ -11,7 +11,7 @@
   "dependencies": {
     "@deck.gl/core": "^9.1.0",
     "@deck.gl/layers": "^9.1.0",
-    "@duckdb/duckdb-wasm": "^1.33.1-dev20.0",
+    "@duckdb/duckdb-wasm": "1.29.0",
     "@tanstack/store": "^0.7.0",
     "mapbox-gl": "^3.9.0"
   },

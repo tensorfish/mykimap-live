@@ -147,7 +147,7 @@
         pointer-events: auto;
       }
       #pb-slider { flex: 1; cursor: pointer; }
-      #pb-close, #pb-play {
+      #pb-close, #pb-play, #pb-back, #pb-fwd {
         background: none; border: 1px solid rgba(255,255,255,0.2);
         color: #fff; border-radius: 4px; padding: 4px 10px;
         cursor: pointer; font-size: 12px;
@@ -266,9 +266,11 @@
 
     <!-- Playback controls -->
     <div id="playback" style="display:none">
-      <button id="pb-close" title="Back to live">✕ Live</button>
+      <button id="pb-close" title="Back to live">Live</button>
       <select id="pb-date"></select>
+      <button id="pb-back" title="Back 15s">-15s</button>
       <button id="pb-play">▶</button>
+      <button id="pb-fwd" title="Forward 15s">+15s</button>
       <input id="pb-slider" type="range" min="0" max="100" value="0" />
       <span id="pb-time">--:--</span>
       <select id="pb-speed">
