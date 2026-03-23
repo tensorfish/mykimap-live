@@ -137,18 +137,25 @@ export async function exportParquet(dateStr: string): Promise<string | null> {
   }
 
   try {
-    // For today's date, use the active DB connection (it holds the WAL lock)
     if (dateStr === today && db) {
+      log("info", `Exporting today's Parquet using active DB connection`);
       const conn = db.connect();
       await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
     } else {
+      log("info", `Exporting Parquet for ${dateStr} from file`);
       const exportDb = await openDbAsync(path);
       const conn = exportDb.connect();
       await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
     }
+    log("info", `Parquet exported: ${exportPath}`);
     return exportPath;
   } catch (error) {
     log("error", `Parquet export failed for ${dateStr}: ${error}`);
+    // If re-export failed but an old parquet exists, serve it anyway
+    if (existsSync(exportPath)) {
+      log("warn", `Serving stale Parquet for ${dateStr}`);
+      return exportPath;
+    }
     return null;
   }
 }
