@@ -6,7 +6,7 @@ import type { WorldState, VehiclePosition } from "./types.js";
 
 let db: duckdb.AsyncDuckDB | null = null;
 
-// ── Playback state ──
+// ── State ──
 
 export interface PlaybackState {
   active: boolean;
@@ -21,26 +21,18 @@ export interface PlaybackState {
 }
 
 let playback: PlaybackState = {
-  active: false,
-  loading: false,
-  loadingProgress: "",
-  date: "",
-  minTimestamp: 0,
-  maxTimestamp: 0,
-  currentTimestamp: 0,
-  speed: 1,
-  playing: false,
+  active: false, loading: false, loadingProgress: "",
+  date: "", minTimestamp: 0, maxTimestamp: 0,
+  currentTimestamp: 0, speed: 1, playing: false,
 };
 
-let animFrameId: number | null = null;
-let lastFrameTime = 0;
-
-/** All snapshots loaded into memory: sorted array of { timestamp, vehicles } */
 interface MemorySnapshot {
   timestamp: number;
   vehicles: VehiclePosition[];
 }
+
 let allSnapshots: MemorySnapshot[] = [];
+let lastFedIdx = -1;
 
 // ── Listeners ──
 
@@ -52,18 +44,55 @@ function notify(): void { for (const fn of listeners) fn(); }
 export function getPlaybackState(): PlaybackState { return playback; }
 
 /**
- * Speed multiplier for vehicle animations.
- * - Live mode: returns 1 (normal speed)
- * - Playback playing: returns playback.speed (10×, 60×, etc.)
- * - Playback paused: returns 0 (freeze animations)
+ * Animation speed multiplier — used by the SINGLE render loop in map.ts.
+ * Live mode: 1. Playback playing: playback.speed. Paused: 0.
  */
 export function getAnimationSpeedMultiplier(): number {
-  if (!playback.active) return 1; // live mode
-  if (!playback.playing) return 0; // paused
+  if (!playback.active) return 1;
+  if (!playback.playing) return 0;
   return playback.speed;
 }
 
-// ── Init DuckDB WASM ──
+/**
+ * Called every frame by the render loop in map.ts (via advancePlayback).
+ * Advances the playback timestamp and feeds new snapshots into the
+ * live animation system when crossed. No separate rAF loop.
+ */
+export function advancePlayback(dtMs: number): void {
+  if (!playback.active || !playback.playing) return;
+
+  const cappedDt = Math.min(dtMs, 100);
+  playback.currentTimestamp += (cappedDt / 1000) * playback.speed;
+
+  if (playback.currentTimestamp >= playback.maxTimestamp) {
+    playback.currentTimestamp = playback.maxTimestamp;
+    playback.playing = false;
+    feedCurrentSnapshot();
+    notify();
+    return;
+  }
+
+  feedCurrentSnapshot();
+  notify();
+}
+
+/** Feed the snapshot at currentTimestamp into the live system (if it changed) */
+function feedCurrentSnapshot(): void {
+  if (allSnapshots.length === 0) return;
+  const idx = findSnapshotIndex(playback.currentTimestamp);
+  if (idx === lastFedIdx) return;
+  lastFedIdx = idx;
+
+  const snap = allSnapshots[idx]!;
+  applyTick({
+    timestamp: snap.timestamp,
+    vehicles: snap.vehicles,
+    trails: {}, alerts: [],
+    serverState: "RUNNING", seq: idx,
+  });
+}
+
+// ── DuckDB init ──
 
 async function initDuckDB(): Promise<void> {
   if (db) return;
@@ -75,7 +104,7 @@ async function initDuckDB(): Promise<void> {
   await db.instantiate(bundle.mainModule);
 }
 
-// ── Load entire day into memory ──
+// ── Load day ──
 
 export async function loadDay(date: string): Promise<boolean> {
   try {
@@ -91,7 +120,6 @@ export async function loadDay(date: string): Promise<boolean> {
     const resp = await fetch(`/data/snapshots/${date}`);
     if (!resp.ok) { playback.loading = false; notify(); return false; }
 
-    // Stream download with progress
     const contentLength = parseInt(resp.headers.get("content-length") || "0", 10);
     const reader = resp.body?.getReader();
     if (!reader) { playback.loading = false; notify(); return false; }
@@ -103,11 +131,9 @@ export async function loadDay(date: string): Promise<boolean> {
       if (done) break;
       chunks.push(value);
       received += value.length;
-      if (contentLength > 0) {
-        playback.loadingProgress = `Downloading... ${Math.floor((received / contentLength) * 100)}%`;
-      } else {
-        playback.loadingProgress = `Downloading... ${(received / 1024).toFixed(0)} KB`;
-      }
+      playback.loadingProgress = contentLength > 0
+        ? `Downloading... ${Math.floor((received / contentLength) * 100)}%`
+        : `Downloading... ${(received / 1024).toFixed(0)} KB`;
       notify();
     }
 
@@ -122,14 +148,12 @@ export async function loadDay(date: string): Promise<boolean> {
     const conn = await db!.connect();
     await conn.query(`CREATE OR REPLACE VIEW snap AS SELECT * FROM '${date}.parquet'`);
 
-    // Load ALL rows into memory, grouped by timestamp
     playback.loadingProgress = "Loading snapshots...";
     notify();
 
     const result = await conn.query(`SELECT * FROM snap ORDER BY timestamp, entity_id`);
     const rows = result.toArray();
 
-    // Group rows by timestamp
     const grouped = new Map<number, any[]>();
     for (const row of rows) {
       const ts = Number((row as any).timestamp);
@@ -138,14 +162,17 @@ export async function loadDay(date: string): Promise<boolean> {
     }
 
     const sortedTimestamps = [...grouped.keys()].sort((a, b) => a - b);
+    const prevDists = new Map<string, { lat: number; lon: number }>();
 
-    // Build snapshots from raw feed data
     allSnapshots = sortedTimestamps.map((ts) => {
       const rawRows = grouped.get(ts)!;
       const vehicles: VehiclePosition[] = rawRows.map((row: any) => {
         const entityId = row.entity_id;
-        // Raw feed data — no shapeDistTraveled (not in recording).
-        // Set to -1 so the client uses lat/lon directly.
+        const lat = row.latitude;
+        const lon = row.longitude;
+        const prev = prevDists.get(entityId);
+        prevDists.set(entityId, { lat, lon });
+
         return {
           entityId,
           mode: row.mode,
@@ -155,8 +182,8 @@ export async function loadDay(date: string): Promise<boolean> {
           startDate: row.start_date ?? "",
           vehicleId: row.vehicle_id,
           vehicleLabel: row.vehicle_label ?? "",
-          latitude: row.latitude,
-          longitude: row.longitude,
+          latitude: lat,
+          longitude: lon,
           bearing: row.bearing,
           speed: row.speed,
           timestamp: Number(row.vehicle_ts ?? ts),
@@ -171,23 +198,19 @@ export async function loadDay(date: string): Promise<boolean> {
     });
 
     await conn.close();
+    lastFedIdx = -1;
 
     if (allSnapshots.length === 0) {
-      playback.loading = false;
-      notify();
-      return false;
+      playback.loading = false; notify(); return false;
     }
 
     playback = {
-      active: true,
-      loading: false,
-      loadingProgress: "",
+      active: true, loading: false, loadingProgress: "",
       date,
       minTimestamp: allSnapshots[0]!.timestamp,
       maxTimestamp: allSnapshots[allSnapshots.length - 1]!.timestamp,
       currentTimestamp: allSnapshots[0]!.timestamp,
-      speed: 1,
-      playing: false,
+      speed: 1, playing: false,
     };
 
     playback.loadingProgress = `${allSnapshots.length} snapshots loaded`;
@@ -202,7 +225,7 @@ export async function loadDay(date: string): Promise<boolean> {
   }
 }
 
-// ── Find snapshot at timestamp (binary search, synchronous, instant) ──
+// ── Binary search ──
 
 function findSnapshotIndex(ts: number): number {
   let lo = 0, hi = allSnapshots.length - 1;
@@ -214,46 +237,13 @@ function findSnapshotIndex(ts: number): number {
   return lo;
 }
 
-/** Track which snapshot index was last fed to the live animation system */
-let lastFedIdx = -1;
-
-/**
- * Feed the next snapshot into the live animation pipeline when the
- * playback timestamp crosses into a new snapshot.
- *
- * No custom interpolation here — the live system (feedTick → route
- * shape animation → computeFrame → trails) handles all the smooth
- * movement. We just tell it "here are the new vehicle positions"
- * at the right moments.
- */
-function renderAtCurrentTime(): void {
-  if (allSnapshots.length === 0) return;
-
-  const idx = findSnapshotIndex(playback.currentTimestamp);
-
-  // Only feed a new snapshot when we cross into a new one
-  if (idx === lastFedIdx) return;
-  lastFedIdx = idx;
-
-  const snap = allSnapshots[idx]!;
-
-  applyTick({
-    timestamp: snap.timestamp,
-    vehicles: snap.vehicles,
-    trails: {},
-    alerts: [],
-    serverState: "RUNNING",
-    seq: idx,
-  });
-}
-
 // ── Controls ──
 
 export function seekTo(timestamp: number): void {
   playback.currentTimestamp = Math.max(playback.minTimestamp, Math.min(timestamp, playback.maxTimestamp));
-  lastFedIdx = -1; // force re-feed on seek
+  lastFedIdx = -1;
+  feedCurrentSnapshot();
   notify();
-  renderAtCurrentTime();
 }
 
 export function setSpeed(speed: number): void {
@@ -263,15 +253,12 @@ export function setSpeed(speed: number): void {
 
 export function play(): void {
   playback.playing = true;
-  lastFrameTime = performance.now();
   notify();
-  if (!animFrameId) animFrameId = requestAnimationFrame(playbackFrame);
 }
 
 export function pause(): void {
   playback.playing = false;
   notify();
-  if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
 }
 
 export function stopPlayback(): void {
@@ -280,7 +267,6 @@ export function stopPlayback(): void {
   allSnapshots = [];
   lastFedIdx = -1;
   notify();
-  if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
 }
 
 export async function listAvailableDates(): Promise<string[]> {
@@ -289,33 +275,4 @@ export async function listAvailableDates(): Promise<string[]> {
     if (!resp.ok) return [];
     return await resp.json();
   } catch { return []; }
-}
-
-// ── Playback loop ──
-
-function playbackFrame(now: number): void {
-  if (!playback.playing || !playback.active) {
-    animFrameId = null;
-    return;
-  }
-
-  const dtMs = Math.min(now - lastFrameTime, 100); // cap to avoid huge jumps on tab switch
-  lastFrameTime = now;
-
-  // Advance playback time
-  playback.currentTimestamp += (dtMs / 1000) * playback.speed;
-
-  if (playback.currentTimestamp >= playback.maxTimestamp) {
-    playback.currentTimestamp = playback.maxTimestamp;
-    playback.playing = false;
-    renderAtCurrentTime();
-    notify();
-    animFrameId = null;
-    return;
-  }
-
-  // Render interpolated positions every frame for smooth animation
-  renderAtCurrentTime();
-  notify();
-  animFrameId = requestAnimationFrame(playbackFrame);
 }

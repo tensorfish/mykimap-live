@@ -3,7 +3,7 @@ import { Deck } from "@deck.gl/core";
 import type { VehiclePosition, TransportMode } from "./types.js";
 import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, selectVehicle } from "./store.js";
 import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
-import { getAnimationSpeedMultiplier } from "./playback.js";
+import { getAnimationSpeedMultiplier, advancePlayback } from "./playback.js";
 
 const INITIAL_VIEW = {
   longitude: 144.963,
@@ -96,6 +96,9 @@ export function initMap(
   function renderFrame(now: number) {
     const dtMs = now - lastFrameTime;
     lastFrameTime = now;
+
+    // Advance playback timestamp (no-op if not in playback mode)
+    advancePlayback(dtMs);
 
     if (deck && currentVehicles.length > 0) {
       const selectedId = getSelectedEntityId();
