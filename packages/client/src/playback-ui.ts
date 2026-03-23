@@ -198,7 +198,7 @@ export function initPlaybackUI(): void {
 
   function exitPlayback(): void {
     stopPlayback();
-    document.title = "Myki Map - Live";
+    document.title = "Myki Map - Live Melbourne Transport";
     document.getElementById("vehicle-count")?.classList.remove("hidden");
 
     playbackEl.style.display = "none";

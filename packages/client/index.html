@@ -3,10 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <title>Myki Map - Live</title>
+    <title>Myki Map - Live Melbourne Transport</title>
+    <meta name="description" content="Real-time map of every tram, train, and bus in Melbourne. Watch 2,000+ vehicles move live across the city with route-following animation, congestion heatmaps, and historical playback." />
+    <meta name="keywords" content="Melbourne, transport, tram, train, bus, PTV, real-time, map, GTFS, myki, public transport, Victoria" />
+    <meta name="author" content="Tensorfish" />
+    <meta name="theme-color" content="#0a0a0e" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Myki Map - Live Melbourne Transport" />
+    <meta property="og:description" content="Real-time map of every tram, train, and bus in Melbourne. 2,000+ vehicles moving live with congestion heatmaps and historical playback." />
+    <meta property="og:image" content="/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="944" />
+    <meta property="og:url" content="https://mykimap.live" />
+    <meta property="og:site_name" content="Myki Map" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Myki Map - Live Melbourne Transport" />
+    <meta name="twitter:description" content="Real-time map of every tram, train, and bus in Melbourne. 2,000+ vehicles moving live." />
+    <meta name="twitter:image" content="/og.jpg" />
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://mykimap.live" />
+
     <link rel="icon" type="image/png" href="/tram.png" />
+    <link rel="apple-touch-icon" href="/tram.png" />
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.9.2/mapbox-gl.css" rel="stylesheet" />
     <link href="/src/styles.css" rel="stylesheet" />
+
+    <!-- Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-EZZG1ZKVCE"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-EZZG1ZKVCE');
+    </script>
   </head>
   <body>
     <div id="map"></div>
