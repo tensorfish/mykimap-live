@@ -3,7 +3,7 @@ import { withMermaid } from "vitepress-plugin-mermaid";
 
 export default withMermaid(
   defineConfig({
-    title: "Melbourne Transport Map",
+    title: "mykimap",
     description:
       "Internal documentation for the real-time transport visualisation",
     base: "/",
@@ -31,7 +31,7 @@ export default withMermaid(
       socialLinks: [
         {
           icon: "github",
-          link: "https://github.com/tensorfish/trams-melbourne",
+          link: "https://github.com/tensorfish/mykimap",
         },
       ],
     },

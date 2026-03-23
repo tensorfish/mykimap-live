@@ -1,7 +1,7 @@
 ---
 layout: home
 hero:
-  name: Melbourne Transport Map
+  name: mykimap
   text: Real-time public transport visualisation
   tagline: Every tram, train, and bus in Victoria — live on one map.
   actions:

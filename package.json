@@ -1,5 +1,5 @@
 {
-  "name": "trams-melbourne",
+  "name": "mykimap",
   "private": true,
   "workspaces": ["packages/*", "docs"],
   "scripts": {

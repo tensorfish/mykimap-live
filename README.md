@@ -1,4 +1,4 @@
-# Melbourne Transport Map
+# mykimap
 
 A real-time map of every tram, train, and bus in Victoria, Australia.
 
@@ -21,8 +21,8 @@ The browser renders it all on a dark Mapbox base map using deck.gl for GPU-accel
 ### Install
 
 ```bash
-git clone https://github.com/tensorfish/trams-melbourne.git
-cd trams-melbourne
+git clone https://github.com/tensorfish/mykimap.git
+cd mykimap
 bun install
 ```
 

@@ -7,7 +7,7 @@
  * AudioContext created lazily on first user gesture (browser autoplay policy).
  */
 
-const STORAGE_KEY = "trams-mel-sound";
+const STORAGE_KEY = "mykimap-sound";
 
 let ctx: AudioContext | null = null;
 let muted = true;
