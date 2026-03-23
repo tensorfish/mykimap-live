@@ -264,8 +264,8 @@ function startServer(): void {
         return withCors(new Response(null, { status: 204 }));
       }
 
-      // Rate limiting (skip static files and WebSocket)
-      if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/data/")) {
+      // Rate limiting (API endpoints only — snapshots serve cached files)
+      if (url.pathname.startsWith("/api/")) {
         if (!checkRateLimit(ip)) {
           return withCors(new Response("Too many requests", { status: 429 }));
         }
