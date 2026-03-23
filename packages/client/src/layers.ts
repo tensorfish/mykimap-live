@@ -136,7 +136,7 @@ function clientSnapToShape(v: VehiclePosition): number {
 // - Trail = shape slice from tailDist to currentDist
 
 const TRAIL_LENGTH_M = 800;
-const TRAIL_FADE_SPEED = 3; // m/s when stopped
+const TRAIL_FADE_SPEED = 30; // m/s when stopped — 800m trail fades in ~27s
 const ANIM_SPEED_MS = 15; // m/s default animation speed
 
 interface VehicleAnim {
