@@ -117,10 +117,15 @@ export async function recordSnapshot(vehicles: VehiclePosition[], headerTimestam
 
 export function listRecordingDates(): string[] {
   if (!existsSync(config.recordingDataDir)) return [];
-  return readdirSync(config.recordingDataDir)
-    .filter((f) => f.endsWith(".duckdb"))
-    .map((f) => f.replace(".duckdb", ""))
-    .sort();
+  // Scan for .duckdb files — works regardless of RECORDING_ENABLED
+  // (tools/generate-snapshot writes directly to this directory)
+  const dates = new Set<string>();
+  for (const f of readdirSync(config.recordingDataDir)) {
+    if (f.endsWith(".duckdb") && !f.endsWith(".duckdb.wal")) {
+      dates.add(f.replace(".duckdb", ""));
+    }
+  }
+  return [...dates].sort();
 }
 
 export async function exportParquet(dateStr: string): Promise<string | null> {

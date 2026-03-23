@@ -241,7 +241,9 @@ function startServer(): void {
 
       // Snapshot listing
       if (url.pathname === "/data/snapshots") {
-        return Response.json(listRecordingDates());
+        const dates = listRecordingDates();
+        log("debug", `Snapshot listing requested`, { dates });
+        return Response.json(dates);
       }
 
       // Snapshot Parquet export
