@@ -51,7 +51,6 @@
         align-items: center;
         pointer-events: auto;
         backdrop-filter: blur(8px);
-        max-width: calc(100% - 24px);
       }
       .filter-chip {
         display: flex;
@@ -81,14 +80,14 @@
       #filter-expand:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
       #filter-expand.open { transform: rotate(180deg); }
       #filter-row {
-        width: 100%;
         display: flex;
         flex-direction: column;
         gap: 4px;
         margin-top: 6px;
+        /* Take full width of the flex line (chips row) without expanding the container */
+        flex-basis: 100%;
       }
       #filter-row input {
-        width: 100%;
         background: rgba(255,255,255,0.08);
         border: 1px solid rgba(255,255,255,0.15);
         color: #fff;
