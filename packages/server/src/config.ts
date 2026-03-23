@@ -56,7 +56,9 @@ export const config = {
 
   /** Recording — DuckDB snapshot storage */
   recordingEnabled: optionalEnv("RECORDING_ENABLED", "true") === "true",
-  recordingDataDir: optionalEnv("RECORDING_DATA_DIR", ".data/snapshots"),
+  recordingDataDir: optionalEnv("RECORDING_DATA_DIR",
+    new URL("../../../.data/snapshots", import.meta.url).pathname
+  ),
   recordingRetentionDays: parseInt(optionalEnv("RECORDING_RETENTION_DAYS", "30"), 10),
 
   /** GTFS Schedule (static) — used for route shapes */
@@ -64,7 +66,9 @@ export const config = {
     "GTFS_SCHEDULE_URL",
     "https://opendata.transport.vic.gov.au/dataset/3f4e292e-7f8a-4ffe-831f-1953be0fe448/resource/fb152201-859f-4882-9206-b768060b50ad/download/gtfs.zip"
   ),
-  gtfsCacheDir: optionalEnv("GTFS_CACHE_DIR", ".cache/gtfs"),
+  gtfsCacheDir: optionalEnv("GTFS_CACHE_DIR",
+    new URL("../../../.cache/gtfs", import.meta.url).pathname
+  ),
 } as const;
 
 // ── Feed definitions ──
