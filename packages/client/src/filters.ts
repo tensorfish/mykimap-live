@@ -1,9 +1,7 @@
 import { store, setFilter } from "./store.js";
 import type { Filters } from "./store.js";
+import type { TransportMode } from "./types.js";
 
-/**
- * Wire up the filter chip click handlers and sync visual state with store.
- */
 export function initFilters(): void {
   const chips = document.querySelectorAll<HTMLElement>(".filter-chip[data-filter]");
 
@@ -15,12 +13,26 @@ export function initFilters(): void {
     });
   }
 
-  // Sync chip visual state on store change
   store.subscribe(() => {
-    const { filters } = store.state;
+    const { filters, worldState } = store.state;
+
+    // Count vehicles per mode
+    const counts: Record<TransportMode, number> = { metro: 0, tram: 0, bus: 0, vline: 0 };
+    if (worldState) {
+      for (const v of worldState.vehicles) {
+        counts[v.mode]++;
+      }
+    }
+
     for (const chip of chips) {
       const key = chip.dataset.filter as keyof Filters;
       chip.classList.toggle("off", !filters[key]);
+
+      // Update count label
+      const countEl = chip.querySelector(".chip-count");
+      if (countEl && key in counts) {
+        countEl.textContent = String(counts[key as TransportMode]);
+      }
     }
   });
 }

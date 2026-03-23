@@ -1,6 +1,6 @@
 import { store } from "./store.js";
 import { reconnect } from "./ws.js";
-import type { ClientState, TransportMode } from "./types.js";
+import type { ClientState } from "./types.js";
 
 const STATE_LABELS: Record<ClientState, string> = {
   LOADING: "Loading map…",
@@ -42,23 +42,7 @@ export function initStatusBar(): void {
 
     if (clientState === "ACTIVE" && worldState) {
       // Count per mode
-      const counts: Record<TransportMode, number> = { metro: 0, tram: 0, bus: 0, vline: 0 };
-      for (const v of worldState.vehicles) {
-        counts[v.mode]++;
-      }
-
-      const segments: string[] = [];
-      if (counts.metro > 0) segments.push(`TRAIN ${counts.metro}`);
-      if (counts.tram > 0) segments.push(`TRAM ${counts.tram}`);
-      if (counts.bus > 0) segments.push(`BUS ${counts.bus}`);
-      if (counts.vline > 0) segments.push(`VLINE ${counts.vline}`);
-
-      let text = segments.join(" · ");
-      if (lastTickAt > 0) {
-        text += `  ·  ${timeAgo(lastTickAt)}`;
-      }
-
-      info.textContent = text;
+      info.textContent = lastTickAt > 0 ? timeAgo(lastTickAt) : "";
     } else {
       info.textContent = "";
     }

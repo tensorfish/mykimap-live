@@ -68,6 +68,11 @@
       .filter-chip .dot {
         width: 8px; height: 8px; border-radius: 50%;
       }
+      .chip-count {
+        opacity: 0.5;
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+      }
 
 
       /* ── Vehicle info panel (floating card) ── */
@@ -191,10 +196,10 @@
     </div>
 
     <div id="filters">
-      <div class="filter-chip" data-filter="metro"><span class="dot" style="background:#34ACE1"></span>Trains</div>
-      <div class="filter-chip" data-filter="tram"><span class="dot" style="background:#78BE20"></span>Trams</div>
-      <div class="filter-chip" data-filter="bus"><span class="dot" style="background:#FF8200"></span>Buses</div>
-      <div class="filter-chip" data-filter="vline"><span class="dot" style="background:#A57FB2"></span>V/Line</div>
+      <div class="filter-chip" data-filter="metro"><span class="dot" style="background:#34ACE1"></span>Trains <span class="chip-count">—</span></div>
+      <div class="filter-chip" data-filter="tram"><span class="dot" style="background:#78BE20"></span>Trams <span class="chip-count">—</span></div>
+      <div class="filter-chip" data-filter="bus"><span class="dot" style="background:#FF8200"></span>Buses <span class="chip-count">—</span></div>
+      <div class="filter-chip" data-filter="vline"><span class="dot" style="background:#A57FB2"></span>V/Line <span class="chip-count">—</span></div>
 
     </div>
 
