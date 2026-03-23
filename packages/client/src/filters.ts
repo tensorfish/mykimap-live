@@ -11,6 +11,7 @@ export function initFilters(): void {
   const filterCount = document.getElementById("filter-count")!;
 
   let expanded = false;
+  const filtersEl = document.getElementById("filters")!;
 
   // Mode chip toggles
   for (const chip of chips) {
@@ -20,19 +21,24 @@ export function initFilters(): void {
     });
   }
 
-  // Expand/collapse
+  // Expand/collapse — lock width on first expand so it doesn't grow
   expandBtn.addEventListener("click", () => {
     expanded = !expanded;
-    filterRow.style.display = expanded ? "flex" : "none";
-    expandBtn.classList.toggle("open", expanded);
     if (expanded) {
+      // Lock the width before showing inputs
+      const width = filtersEl.offsetWidth;
+      filtersEl.style.width = width + "px";
+      filterRow.style.display = "flex";
       routeInput.focus();
     } else {
+      filterRow.style.display = "none";
+      filtersEl.style.width = "";
       routeInput.value = "";
       vehicleInput.value = "";
       setRouteFilter("");
       setVehicleFilter("");
     }
+    expandBtn.classList.toggle("open", expanded);
   });
 
   // Text inputs
