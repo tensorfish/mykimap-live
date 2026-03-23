@@ -86,11 +86,30 @@ async function ensureCurrentDb(): Promise<void> {
 
 // ── Public API ──
 
+let parquetTimer: ReturnType<typeof setInterval> | null = null;
+const PARQUET_EXPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function initRecorder(): Promise<void> {
   if (!config.recordingEnabled) return;
   mkdirSync(config.recordingDataDir, { recursive: true });
   cleanRetention();
   await initDb(melbourneDate());
+
+  // Auto-export today's parquet every 5 minutes so clients
+  // don't trigger a full export on each request.
+  parquetTimer = setInterval(async () => {
+    try {
+      const today = melbourneDate();
+      if (db && currentDateStr === today) {
+        const exportPath = join(config.recordingDataDir, `${today}.parquet`);
+        const conn = db.connect();
+        await runAsync(conn, `COPY snapshots TO '${exportPath}' (FORMAT PARQUET)`);
+        log("debug", `Auto-exported today's Parquet: ${exportPath}`);
+      }
+    } catch (error) {
+      log("warn", `Auto Parquet export failed: ${error}`);
+    }
+  }, PARQUET_EXPORT_INTERVAL_MS);
 }
 
 export async function recordSnapshot(vehicles: VehiclePosition[], headerTimestamp: number): Promise<void> {
@@ -132,14 +151,15 @@ export async function exportParquet(dateStr: string): Promise<string | null> {
 
   const exportPath = join(config.recordingDataDir, `${dateStr}.parquet`);
 
-  // If parquet already exists and it's not today (today's DB is still being written to),
-  // serve the cached export
-  const today = melbourneDate();
-  if (existsSync(exportPath) && dateStr !== today) {
+  // Serve cached parquet if it exists. For today, the auto-export timer
+  // keeps it fresh (at most 5 minutes stale). For past dates, it's final.
+  if (existsSync(exportPath)) {
     return exportPath;
   }
 
+  // No cached file — export now (first request for this date)
   try {
+    const today = melbourneDate();
     if (dateStr === today && db) {
       log("info", `Exporting today's Parquet using active DB connection`);
       const conn = db.connect();
@@ -154,11 +174,6 @@ export async function exportParquet(dateStr: string): Promise<string | null> {
     return exportPath;
   } catch (error) {
     log("error", `Parquet export failed for ${dateStr}: ${error}`);
-    // If re-export failed but an old parquet exists, serve it anyway
-    if (existsSync(exportPath)) {
-      log("warn", `Serving stale Parquet for ${dateStr}`);
-      return exportPath;
-    }
     return null;
   }
 }
@@ -183,6 +198,7 @@ function cleanRetention(): void {
 }
 
 export async function closeRecorder(): Promise<void> {
+  if (parquetTimer) { clearInterval(parquetTimer); parquetTimer = null; }
   // Skip db.close() — crashes Bun. Process exit handles cleanup.
   db = null;
 }
