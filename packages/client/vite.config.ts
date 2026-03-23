@@ -1,6 +1,10 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  // Suppress missing source map warnings from duckdb-wasm
+  optimizeDeps: {
+    exclude: ["@duckdb/duckdb-wasm"],
+  },
   server: {
     port: 5173,
     proxy: {
