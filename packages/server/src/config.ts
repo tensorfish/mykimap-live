@@ -80,34 +80,19 @@ const BASE_URL =
   "https://api.opendata.transport.vic.gov.au/opendata/public-transport/gtfs/realtime/v1";
 
 /**
- * All 10 available GTFS-RT feeds.
- * Bus and V/Line have no service alerts (404 confirmed).
+ * Feeds to poll. Only vehicle positions and service alerts — trip updates
+ * are available but not consumed (see .memory/gtfs-vic.md for the full inventory).
  */
 const FEED_MATRIX: Array<{ mode: TransportMode; types: FeedType[] }> = [
-  {
-    mode: "metro",
-    types: ["vehicle-positions", "trip-updates", "service-alerts"],
-  },
-  {
-    mode: "tram",
-    types: ["vehicle-positions", "trip-updates", "service-alerts"],
-  },
-  { mode: "bus", types: ["vehicle-positions", "trip-updates"] },
-  { mode: "vline", types: ["vehicle-positions", "trip-updates"] },
+  { mode: "metro", types: ["vehicle-positions", "service-alerts"] },
+  { mode: "tram", types: ["vehicle-positions", "service-alerts"] },
+  { mode: "bus", types: ["vehicle-positions"] },
+  { mode: "vline", types: ["vehicle-positions"] },
 ];
 
 export const feeds: FeedDescriptor[] = FEED_MATRIX.flatMap(({ mode, types }) =>
-  types.map((type) => ({
-    mode,
-    type,
-    url: `${BASE_URL}/${mode}/${type}`,
-  }))
+  types.map((type) => ({ mode, type, url: `${BASE_URL}/${mode}/${type}` }))
 );
 
-export const vehiclePositionFeeds = feeds.filter(
-  (f) => f.type === "vehicle-positions"
-);
-export const tripUpdateFeeds = feeds.filter((f) => f.type === "trip-updates");
-export const serviceAlertFeeds = feeds.filter(
-  (f) => f.type === "service-alerts"
-);
+export const vehiclePositionFeeds = feeds.filter((f) => f.type === "vehicle-positions");
+export const serviceAlertFeeds = feeds.filter((f) => f.type === "service-alerts");

@@ -2,12 +2,9 @@
 
 export type TransportMode = "metro" | "tram" | "bus" | "vline";
 
-export const TRANSPORT_MODES: TransportMode[] = [
-  "metro",
-  "tram",
-  "bus",
-  "vline",
-];
+export const TRANSPORT_MODES: readonly TransportMode[] = [
+  "metro", "tram", "bus", "vline",
+] as const;
 
 // ── Feed types ──
 

@@ -172,7 +172,12 @@ function cleanRetention(): void {
   for (const file of readdirSync(config.recordingDataDir).filter((f) => f.endsWith(".duckdb"))) {
     const dateStr = file.replace(".duckdb", "");
     if (dateStr < cutoffStr) {
-      try { unlinkSync(join(config.recordingDataDir, file)); log("info", `Deleted old recording: ${file}`); } catch {}
+      try {
+        unlinkSync(join(config.recordingDataDir, file));
+        log("info", `Deleted old recording: ${file}`);
+      } catch (e) {
+        log("warn", `Failed to delete old recording: ${file}`, { error: String(e) });
+      }
     }
   }
 }

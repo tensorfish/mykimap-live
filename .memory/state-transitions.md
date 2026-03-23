@@ -100,7 +100,7 @@ Actors: `user` (human action), `system` (internal logic), `external` (feed, netw
 
 | Constant | Value |
 |---|---|
-| Poll interval | 7s |
+| Poll interval | 15s |
 | Broadcast interval | ~1s |
 | Stale vehicle threshold | 120s |
 | Client stale threshold | 5s |

@@ -37,6 +37,6 @@ At any given moment the map tracks roughly **2,000 vehicles**:
 
 Plus the **GTFS Schedule** static dataset (~191 MB) for route names, colors, stop names, and route shape geometry.
 
-The feeds cache server-side for **~30 seconds**. The server polls every **7 seconds** to catch changes fast, snaps each vehicle onto its actual route geometry, and streams smooth interpolated positions to every connected browser.
+The feeds cache server-side for **~30 seconds**. The server polls every **15 seconds**, snaps each vehicle onto its actual route geometry, and streams smooth interpolated positions to every connected browser.
 
 See [gtfs-vic.md](gtfs-vic.md) for the full feed analysis.
