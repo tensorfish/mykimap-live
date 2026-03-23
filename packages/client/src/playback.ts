@@ -139,35 +139,30 @@ export async function loadDay(date: string): Promise<boolean> {
 
     const sortedTimestamps = [...grouped.keys()].sort((a, b) => a - b);
 
-    // Build snapshots with prevShapeDistTraveled from the prior snapshot.
-    // This lets the client compute speed and start animating immediately.
-    const prevDists = new Map<string, number>(); // entityId → previous shape_dist
-
+    // Build snapshots from raw feed data
     allSnapshots = sortedTimestamps.map((ts) => {
       const rawRows = grouped.get(ts)!;
       const vehicles: VehiclePosition[] = rawRows.map((row: any) => {
         const entityId = row.entity_id;
-        const shapeDist = row.shape_dist;
-        const prev = prevDists.get(entityId) ?? shapeDist;
-        prevDists.set(entityId, shapeDist);
-
+        // Raw feed data — no shapeDistTraveled (not in recording).
+        // Set to -1 so the client uses lat/lon directly.
         return {
           entityId,
           mode: row.mode,
-          tripId: "",
+          tripId: row.trip_id ?? "",
           routeId: row.route_id,
-          startTime: "",
-          startDate: "",
+          startTime: row.start_time ?? "",
+          startDate: row.start_date ?? "",
           vehicleId: row.vehicle_id,
-          vehicleLabel: "",
+          vehicleLabel: row.vehicle_label ?? "",
           latitude: row.latitude,
           longitude: row.longitude,
           bearing: row.bearing,
           speed: row.speed,
-          timestamp: ts,
-          stale: Boolean(row.stale),
-          shapeDistTraveled: shapeDist,
-          prevShapeDistTraveled: prev,
+          timestamp: Number(row.vehicle_ts ?? ts),
+          stale: false,
+          shapeDistTraveled: -1,
+          prevShapeDistTraveled: -1,
           shapeId: "",
           pathSegment: [],
         };

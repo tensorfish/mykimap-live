@@ -339,17 +339,20 @@ async function main() {
   await new Promise<void>((resolve, reject) => {
     conn.run(`
       CREATE TABLE snapshots (
-        timestamp  UINTEGER,
-        entity_id  VARCHAR,
-        mode       VARCHAR,
-        route_id   VARCHAR,
-        vehicle_id VARCHAR,
-        latitude   FLOAT,
-        longitude  FLOAT,
-        bearing    FLOAT,
-        speed      FLOAT,
-        stale      BOOLEAN,
-        shape_dist FLOAT
+        timestamp    UINTEGER,
+        entity_id    VARCHAR,
+        mode         VARCHAR,
+        trip_id      VARCHAR,
+        route_id     VARCHAR,
+        vehicle_id   VARCHAR,
+        vehicle_label VARCHAR,
+        latitude     FLOAT,
+        longitude    FLOAT,
+        bearing      FLOAT,
+        speed        FLOAT,
+        start_time   VARCHAR,
+        start_date   VARCHAR,
+        vehicle_ts   UINTEGER
       )
     `, (err: any) => err ? reject(err) : resolve());
   });
@@ -378,7 +381,7 @@ async function main() {
       const adjustedBearing = v.direction < 0 ? (bearing + 180) % 360 : bearing;
 
       values.push(
-        `(${timestamp},'${esc(v.entityId)}','${esc(v.mode)}','${esc(v.routeId)}','${esc(v.vehicleId)}',${pos.lat},${pos.lon},${adjustedBearing},${v.speed},false,${v.shapeDist})`
+        `(${timestamp},'${esc(v.entityId)}','${esc(v.mode)}','','${esc(v.routeId)}','${esc(v.vehicleId)}','',${pos.lat},${pos.lon},${adjustedBearing},${v.speed},'','',${timestamp})`
       );
       rowCount++;
     }

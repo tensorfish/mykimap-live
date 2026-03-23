@@ -56,17 +56,20 @@ async function initDb(dateStr: string): Promise<void> {
 
   await runAsync(conn, `
     CREATE TABLE IF NOT EXISTS snapshots (
-      timestamp  UINTEGER,
-      entity_id  VARCHAR,
-      mode       VARCHAR,
-      route_id   VARCHAR,
-      vehicle_id VARCHAR,
-      latitude   FLOAT,
-      longitude  FLOAT,
-      bearing    FLOAT,
-      speed      FLOAT,
-      stale      BOOLEAN,
-      shape_dist FLOAT
+      timestamp    UINTEGER,
+      entity_id    VARCHAR,
+      mode         VARCHAR,
+      trip_id      VARCHAR,
+      route_id     VARCHAR,
+      vehicle_id   VARCHAR,
+      vehicle_label VARCHAR,
+      latitude     FLOAT,
+      longitude    FLOAT,
+      bearing      FLOAT,
+      speed        FLOAT,
+      start_time   VARCHAR,
+      start_date   VARCHAR,
+      vehicle_ts   UINTEGER
     )
   `);
 
@@ -100,7 +103,7 @@ export async function recordSnapshot(vehicles: VehiclePosition[], headerTimestam
     const esc = (s: string) => s.replace(/'/g, "''");
 
     const values = vehicles.map((v) =>
-      `(${headerTimestamp},'${esc(v.entityId)}','${esc(v.mode)}','${esc(v.routeId)}','${esc(v.vehicleId)}',${v.latitude},${v.longitude},${v.bearing},${v.speed},${v.stale},${v.shapeDistTraveled})`
+      `(${headerTimestamp},'${esc(v.entityId)}','${esc(v.mode)}','${esc(v.tripId)}','${esc(v.routeId)}','${esc(v.vehicleId)}','${esc(v.vehicleLabel)}',${v.latitude},${v.longitude},${v.bearing},${v.speed},'${esc(v.startTime)}','${esc(v.startDate)}',${v.timestamp})`
     ).join(",");
 
     conn.run(`INSERT INTO snapshots VALUES ${values}`);

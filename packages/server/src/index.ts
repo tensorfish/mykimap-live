@@ -124,14 +124,14 @@ async function pollCycle(): Promise<void> {
       const isFresh = result.headerTimestamp > lastHeaderTimestamp;
 
       if (isFresh) {
-        // Feed data changed — process the new snapshot
+        // Record RAW feed data before processing (faithful copy of API response)
+        recordSnapshot(result.vehicles, result.headerTimestamp).catch(() => {});
+
+        // Process: snap to shapes, calculate speed/bearing, interpolate
         currentVehicles = processSnapshot(result.vehicles, result.headerTimestamp);
         currentAlerts = result.alerts;
         lastHeaderTimestamp = result.headerTimestamp;
         log("info", `Fresh data`, { headerTimestamp: result.headerTimestamp, vehicles: currentVehicles.length });
-
-        // Record snapshot to DuckDB (if enabled, non-blocking)
-        recordSnapshot(currentVehicles, result.headerTimestamp).catch(() => {});
       } else {
         log("debug", `Duplicate poll skipped (header timestamp unchanged: ${result.headerTimestamp})`);
       }
