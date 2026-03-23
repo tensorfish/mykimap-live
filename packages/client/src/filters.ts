@@ -27,11 +27,19 @@ export function initFilters(): void {
     });
   }
 
+  // Re-measure locked width on resize
+  window.addEventListener("resize", () => {
+    if (expanded) {
+      filtersEl.style.width = "";
+      const width = filtersEl.offsetWidth;
+      filtersEl.style.width = width + "px";
+    }
+  });
+
   // Expand/collapse — lock width on first expand so it doesn't grow
   expandBtn.addEventListener("click", () => {
     expanded = !expanded;
     if (expanded) {
-      // Lock the width before showing inputs
       const width = filtersEl.offsetWidth;
       filtersEl.style.width = width + "px";
       filterRow.style.display = "flex";

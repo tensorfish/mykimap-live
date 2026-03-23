@@ -240,6 +240,44 @@ function segmentAvgSpeed(samples: SpeedSample[], cutoff: number): { avg: number;
   return { avg: count > 0 ? sum / count : NaN, count };
 }
 
+/**
+ * Heatmap-only position tracker — separate from animation state.
+ * Used by buildHeatmapForTime in playback to replay snapshots
+ * without polluting the animation queue.
+ */
+const heatmapTracker = new Map<string, { dist: number; ts: number }>();
+
+export function clearHeatmapTracker(): void {
+  heatmapTracker.clear();
+}
+
+/**
+ * Record heatmap data from vehicles WITHOUT touching animation state.
+ * Maintains its own per-vehicle position tracker for speed calculation.
+ */
+export function recordHeatmapOnly(vehicles: VehiclePosition[]): void {
+  for (const v of vehicles) {
+    fetchAndCacheShape(v);
+    const dist = clientSnapToShape(v);
+    if (dist < 0) continue;
+
+    const key = getShapeCacheKey(v);
+    const prev = heatmapTracker.get(v.entityId);
+
+    if (prev) {
+      const moveDist = Math.abs(dist - prev.dist);
+      const dt = Math.abs(v.timestamp - prev.ts);
+
+      if (v.timestamp !== prev.ts && dt > 0 && moveDist > 1) {
+        const speed = moveDist / dt;
+        recordSegmentSpeed(key, v.mode, prev.dist, dist, speed, v.timestamp);
+      }
+    }
+
+    heatmapTracker.set(v.entityId, { dist, ts: v.timestamp });
+  }
+}
+
 /** Speed ratio (0–1) to RGB color: red → yellow → green */
 function speedToColor(ratio: number): [number, number, number, number] {
   const r = Math.min(1, 2 - 2 * ratio);

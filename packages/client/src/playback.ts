@@ -2,7 +2,7 @@ import * as duckdb from "@duckdb/duckdb-wasm";
 import duckdb_wasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
 import duckdb_worker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
 import { applyTick } from "./store.js";
-import { clearAnimations, feedTick } from "./layers.js";
+import { clearAnimations, recordHeatmapOnly, clearHeatmapTracker } from "./layers.js";
 import { showError } from "./error-modal.js";
 import type { WorldState, VehiclePosition } from "./types.js";
 
@@ -353,11 +353,14 @@ function buildHeatmapForTime(ts: number): void {
   const startIdx = findSnapshotIndex(windowStart);
   const endIdx = findSnapshotIndex(ts);
 
+  // Use heatmap-only recorder — doesn't touch animation state
+  clearHeatmapTracker();
   for (let i = startIdx; i <= endIdx; i++) {
     const snap = allSnapshots[i]!;
     if (snap.timestamp < windowStart) continue;
-    feedTick(snap.vehicles);
+    recordHeatmapOnly(snap.vehicles);
   }
+  clearHeatmapTracker();
 }
 
 // ── Controls ──
