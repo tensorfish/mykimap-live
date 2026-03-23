@@ -330,6 +330,7 @@ interface VehicleAnim {
 const anims = new Map<string, VehicleAnim>();
 
 /** Clear all animation state (used when switching playback dates) */
+/** Clear all animation and snap state. Called on playback date switch and seek. */
 export function clearAnimations(): void {
   anims.clear();
   snapCache.clear();
@@ -337,6 +338,7 @@ export function clearAnimations(): void {
 
 // ── Feed data ──
 
+/** Process WebSocket init backlog — build animation queues from historical ticks. */
 export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {
   if (backlog.length === 0) return;
 
@@ -384,6 +386,7 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
   }
 }
 
+/** Process a single tick of vehicle data — update animation targets and heatmap. */
 export function feedTick(vehicles: VehiclePosition[]): void {
   const seen = new Set<string>();
 
@@ -450,6 +453,7 @@ export interface DisplayVehicle {
   vehicleLabel: string;
 }
 
+/** Advance all vehicle animations by dtMs and return display-ready positions. */
 export function computeFrame(vehicles: VehiclePosition[], dtMs: number): DisplayVehicle[] {
   return vehicles.map((v) => {
     const anim = anims.get(v.entityId);
@@ -561,6 +565,7 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
 
 // ── Layers ──
 
+/** Create the deck.gl IconLayer for vehicle arrows. */
 export function createVehicleLayer(display: DisplayVehicle[], selectedId: string | null) {
   const hasSelection = selectedId !== null;
   return new IconLayer<DisplayVehicle>({
@@ -588,6 +593,7 @@ export function createVehicleLayer(display: DisplayVehicle[], selectedId: string
 
 const TRAIL_WIDTH: Record<TransportMode, number> = { metro: 3, tram: 2.5, bus: 1.5, vline: 3 };
 
+/** Create the deck.gl PathLayer for vehicle snail trails. */
 export function createTrailLayer(vehicles: VehiclePosition[], selectedId: string | null) {
   const hasSelection = selectedId !== null;
   const data: { entityId: string; path: Array<[number, number]>; mode: TransportMode }[] = [];
@@ -690,6 +696,7 @@ export function createHeatmapLayer(nowTs: number): PathLayer {
   return cachedHeatmapLayer;
 }
 
+/** Create the deck.gl PathLayer for the selected vehicle's full route shape. */
 export function createRouteShapeLayer(routeShape: Array<[number, number]> | null, mode: TransportMode | null) {
   if (!routeShape || routeShape.length < 2 || !mode) return new PathLayer({ id: "route-shape", data: [] });
   const [r, g, b] = MODE_COLORS[mode];

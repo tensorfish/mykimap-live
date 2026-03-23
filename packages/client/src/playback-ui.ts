@@ -61,6 +61,7 @@ export function initPlaybackUI(): void {
     dateSelect.min = dates[0]!;
     dateSelect.max = dates[dates.length - 1]!;
     dateSelect.value = dates[dates.length - 1]!;
+    dateSelect.title = `${dates.length} recording${dates.length === 1 ? "" : "s"}: ${dates[0]} to ${dates[dates.length - 1]}`;
 
     await enterPlayback(dates[dates.length - 1]!);
   });
@@ -70,15 +71,17 @@ export function initPlaybackUI(): void {
   dateSelect.addEventListener("change", async () => {
     const selected = dateSelect.value;
     if (!availableDates.has(selected)) {
-      // No snapshot for this date — find the nearest available date
+      // No snapshot for this date — snap to nearest available
       const sorted = [...availableDates].sort();
       const nearest = sorted.reduce((best, d) =>
         Math.abs(new Date(d).getTime() - new Date(selected).getTime()) <
         Math.abs(new Date(best).getTime() - new Date(selected).getTime()) ? d : best
       );
       dateSelect.value = nearest;
+      dateSelect.title = `No recording for ${selected}. Loaded ${nearest}.`;
       await enterPlayback(nearest);
     } else {
+      dateSelect.title = `${availableDates.size} recording${availableDates.size === 1 ? "" : "s"} available`;
       await enterPlayback(selected);
     }
   });
