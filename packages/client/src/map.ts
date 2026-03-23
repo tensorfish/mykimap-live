@@ -1,7 +1,7 @@
 import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition, TransportMode } from "./types.js";
-import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, selectVehicle } from "./store.js";
+import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, getAdvancedFilter, selectVehicle } from "./store.js";
 import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
 import { getAnimationSpeedMultiplier, advancePlayback } from "./playback.js";
 
@@ -105,7 +105,19 @@ export function initMap(
       const routeShape = getRouteShape();
       const filters = getFilters();
 
-      const filtered = currentVehicles.filter((v) => filters[v.mode]);
+      const advancedFilter = getAdvancedFilter().toLowerCase();
+
+      const filtered = currentVehicles.filter((v) => {
+        if (!filters[v.mode]) return false;
+        if (advancedFilter) {
+          return v.routeId.toLowerCase().includes(advancedFilter)
+            || v.vehicleId.toLowerCase().includes(advancedFilter)
+            || v.vehicleLabel.toLowerCase().includes(advancedFilter)
+            || v.entityId.toLowerCase().includes(advancedFilter);
+        }
+        return true;
+      });
+
       const speedMult = getAnimationSpeedMultiplier();
       const display = computeFrame(filtered, dtMs * speedMult);
 

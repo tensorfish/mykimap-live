@@ -18,6 +18,8 @@ export interface AppState {
   selectedEntityId: string | null;
   routeShape: Array<[number, number]> | null;
   filters: Filters;
+  /** Advanced text filter — fuzzy substring match on route/vehicle ID */
+  advancedFilter: string;
 }
 
 export const store = new Store<AppState>({
@@ -27,6 +29,7 @@ export const store = new Store<AppState>({
   selectedEntityId: null,
   routeShape: null,
   filters: { metro: true, tram: true, bus: true, vline: true },
+  advancedFilter: "",
 });
 
 // ── Derived selectors ──
@@ -51,10 +54,21 @@ export function getFilters(): Filters {
   return store.state.filters;
 }
 
+export function getAdvancedFilter(): string {
+  return store.state.advancedFilter;
+}
+
 export function setFilter(key: keyof Filters, value: boolean): void {
   store.setState((prev) => ({
     ...prev,
     filters: { ...prev.filters, [key]: value },
+  }));
+}
+
+export function setAdvancedFilter(text: string): void {
+  store.setState((prev) => ({
+    ...prev,
+    advancedFilter: text,
   }));
 }
 

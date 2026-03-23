@@ -68,6 +68,37 @@
       .filter-chip .dot {
         width: 8px; height: 8px; border-radius: 50%;
       }
+      #advanced-toggle {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        color: #888;
+        cursor: pointer;
+        user-select: none;
+        margin-left: 4px;
+      }
+      #advanced-toggle input { cursor: pointer; }
+      #advanced-row {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      #advanced-input {
+        flex: 1;
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.15);
+        color: #fff;
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 12px;
+        outline: none;
+      }
+      #advanced-input:focus { border-color: rgba(255,255,255,0.35); }
+      #advanced-input::placeholder { color: #555; }
+      #advanced-count { font-size: 11px; color: #666; white-space: nowrap; }
       .chip-count {
         opacity: 0.5;
         font-variant-numeric: tabular-nums;
@@ -314,7 +345,11 @@
       <div class="filter-chip" data-filter="tram"><span class="dot" style="background:#78BE20"></span>Trams <span class="chip-count">—</span></div>
       <div class="filter-chip" data-filter="bus"><span class="dot" style="background:#FF8200"></span>Buses <span class="chip-count">—</span></div>
       <div class="filter-chip" data-filter="vline"><span class="dot" style="background:#A57FB2"></span>V/Line <span class="chip-count">—</span></div>
-
+      <label id="advanced-toggle"><input type="checkbox" id="advanced-check" /> Advanced</label>
+      <div id="advanced-row" style="display:none">
+        <input id="advanced-input" type="text" placeholder="Route or vehicle ID..." spellcheck="false" />
+        <span id="advanced-count"></span>
+      </div>
     </div>
 
     <!-- Error modal -->
