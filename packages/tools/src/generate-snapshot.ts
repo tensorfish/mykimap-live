@@ -187,11 +187,20 @@ const MIN_ROUTE_LENGTH = 5000;
 /** Dwell time at each terminus in seconds (wait before reversing) */
 const DWELL_TIME = 120;
 
+/** Mode prefixes matching real GTFS entity ID format */
+const MODE_PREFIX: Record<string, string> = {
+  vline: "01", metro: "02", tram: "03", bus: "60",
+};
+
 interface SimVehicle {
   entityId: string;
+  tripId: string;
   mode: string;
   routeId: string;
   vehicleId: string;
+  vehicleLabel: string;
+  startTime: string;
+  startDate: string;
   route: Route;
   shapeDist: number;
   speed: number; // m/s
@@ -230,14 +239,40 @@ function createVehicles(routes: Route[]): SimVehicle[] {
       const startFraction = i / count;
       const startDist = startFraction * route.totalDist;
 
-      // Alternate direction
       const direction = i % 2 === 0 ? 1 : -1;
 
+      // Generate IDs matching real GTFS feed format
+      const prefix = MODE_PREFIX[mode] ?? "99";
+      const routeShort = route.routeId.match(/-(\w+):$/)?.[1] ?? String(i);
+      const tripId = `${prefix}-${routeShort}--sim-T3-${100000 + i}`;
+      const hour = Math.floor((startFraction * 18) + 5); // 5am-11pm range
+      const min = Math.floor(Math.random() * 60);
+      const startTime = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}:00`;
+
+      // Vehicle IDs matching real format per mode
+      let vehicleId: string;
+      let vehicleLabel = "";
+      if (mode === "metro") {
+        vehicleId = `${1000 + i}T-${1100 + i}T`;
+      } else if (mode === "tram") {
+        vehicleId = String(2000 + i);
+        const classes = ["B2", "E", "C1", "Z3", "A2"];
+        vehicleLabel = classes[i % classes.length]!;
+      } else if (mode === "bus") {
+        vehicleId = `BS${String(i).padStart(2, "0")}XY`;
+      } else {
+        vehicleId = `V${1200 + i}`;
+      }
+
       vehicles.push({
-        entityId: `sim-${mode}-${i}`,
+        entityId: tripId,
+        tripId,
         mode,
         routeId: route.routeId,
-        vehicleId: `${mode.toUpperCase()}-${String(i).padStart(3, "0")}`,
+        vehicleId,
+        vehicleLabel,
+        startTime,
+        startDate: DATE.replace(/-/g, ""),
         route,
         shapeDist: startDist,
         speed: modeSpeeds[mode]! * (0.8 + Math.random() * 0.4),
@@ -371,17 +406,30 @@ async function main() {
   for (let s = 0; s < totalSnapshots; s++) {
     const timestamp = baseTimestamp + s * SNAPSHOT_INTERVAL;
 
-    // Build one batch INSERT per snapshot (~91 rows)
+    // Build one batch INSERT per snapshot
     const values: string[] = [];
     for (const v of vehicles) {
       stepVehicle(v, SNAPSHOT_INTERVAL);
 
       const pos = sampleShape(v.route.shape, v.shapeDist);
-      const bearing = bearingAt(v.route.shape, v.shapeDist);
-      const adjustedBearing = v.direction < 0 ? (bearing + 180) % 360 : bearing;
+
+      // Simulate raw GPS: add slight noise (±5m ≈ ±0.00005°)
+      const noiseLat = pos.lat + (Math.random() - 0.5) * 0.0001;
+      const noiseLon = pos.lon + (Math.random() - 0.5) * 0.0001;
+
+      // Real feed: trams have bearing=0, trains/buses have bearing from feed
+      const bearing = v.mode === "tram" ? 0 :
+        bearingAt(v.route.shape, v.shapeDist) * (v.direction < 0 ? -1 : 1);
+      const normalizedBearing = ((bearing % 360) + 360) % 360;
+
+      // Real feed: speed is always 0 (never provided by PTV)
+      const feedSpeed = 0;
+
+      // Per-vehicle timestamp: slight staleness like real data (10-90s behind header)
+      const vehicleTs = timestamp - Math.floor(10 + Math.random() * 80);
 
       values.push(
-        `(${timestamp},'${esc(v.entityId)}','${esc(v.mode)}','','${esc(v.routeId)}','${esc(v.vehicleId)}','',${pos.lat},${pos.lon},${adjustedBearing},${v.speed},'','',${timestamp})`
+        `(${timestamp},'${esc(v.entityId)}','${esc(v.mode)}','${esc(v.tripId)}','${esc(v.routeId)}','${esc(v.vehicleId)}','${esc(v.vehicleLabel)}',${noiseLat},${noiseLon},${normalizedBearing},${feedSpeed},'${esc(v.startTime)}','${esc(v.startDate)}',${vehicleTs})`
       );
       rowCount++;
     }
