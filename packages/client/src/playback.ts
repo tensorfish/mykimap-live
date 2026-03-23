@@ -214,18 +214,60 @@ function findSnapshotIndex(ts: number): number {
   return lo;
 }
 
+let lastRenderedIdx = -1;
+
 function renderAtCurrentTime(): void {
-  const idx = findSnapshotIndex(playback.currentTimestamp);
-  const snap = allSnapshots[idx];
-  if (!snap) return;
+  if (allSnapshots.length < 2) return;
+
+  const ts = playback.currentTimestamp;
+  const idxA = findSnapshotIndex(ts);
+  const idxB = Math.min(idxA + 1, allSnapshots.length - 1);
+
+  const snapA = allSnapshots[idxA]!;
+  const snapB = allSnapshots[idxB]!;
+
+  // Lerp factor between A and B
+  const span = snapB.timestamp - snapA.timestamp;
+  const t = span > 0 ? (ts - snapA.timestamp) / span : 0;
+
+  // Build a vehicle lookup for snapshot B
+  const vehiclesB = new Map<string, VehiclePosition>();
+  for (const v of snapB.vehicles) vehiclesB.set(v.entityId, v);
+
+  // Interpolate positions between A and B
+  const interpolated: VehiclePosition[] = snapA.vehicles.map((vA) => {
+    const vB = vehiclesB.get(vA.entityId);
+    if (!vB) return vA; // Vehicle not in B — use A's position
+
+    return {
+      ...vA,
+      latitude: vA.latitude + t * (vB.latitude - vA.latitude),
+      longitude: vA.longitude + t * (vB.longitude - vA.longitude),
+      bearing: vB.bearing || vA.bearing,
+      speed: span > 0
+        ? Math.sqrt(
+            Math.pow((vB.latitude - vA.latitude) * 111000, 2) +
+            Math.pow((vB.longitude - vA.longitude) * 111000 * Math.cos(vA.latitude * Math.PI / 180), 2)
+          ) / span
+        : 0,
+      timestamp: Math.floor(ts),
+    };
+  });
+
+  // Also include vehicles only in B (new arrivals)
+  for (const vB of snapB.vehicles) {
+    if (!snapA.vehicles.find((v) => v.entityId === vB.entityId)) {
+      interpolated.push(vB);
+    }
+  }
 
   applyTick({
-    timestamp: snap.timestamp,
-    vehicles: snap.vehicles,
+    timestamp: Math.floor(ts),
+    vehicles: interpolated,
     trails: {},
     alerts: [],
     serverState: "RUNNING",
-    seq: 0,
+    seq: idxA,
   });
 }
 
@@ -274,21 +316,27 @@ export async function listAvailableDates(): Promise<string[]> {
 // ── Playback loop ──
 
 function playbackFrame(now: number): void {
-  if (!playback.playing || !playback.active) return;
+  if (!playback.playing || !playback.active) {
+    animFrameId = null;
+    return;
+  }
 
-  const dtMs = now - lastFrameTime;
+  const dtMs = Math.min(now - lastFrameTime, 100); // cap to avoid huge jumps on tab switch
   lastFrameTime = now;
 
+  // Advance playback time
   playback.currentTimestamp += (dtMs / 1000) * playback.speed;
 
   if (playback.currentTimestamp >= playback.maxTimestamp) {
     playback.currentTimestamp = playback.maxTimestamp;
     playback.playing = false;
-    notify();
     renderAtCurrentTime();
+    notify();
+    animFrameId = null;
     return;
   }
 
+  // Render interpolated positions every frame for smooth animation
   renderAtCurrentTime();
   notify();
   animFrameId = requestAnimationFrame(playbackFrame);
