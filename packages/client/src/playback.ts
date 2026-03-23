@@ -229,7 +229,7 @@ export async function loadDay(date: string): Promise<boolean> {
     const totalSnaps = sortedTimestamps.length;
     const prevDists = new Map<string, { lat: number; lon: number }>();
 
-    playback.loadingProgress = `Building ${totalSnaps.toLocaleString()} snapshots...`;
+    playback.loadingProgress = `Processing ${totalSnaps.toLocaleString()} snapshots...`;
     notify();
 
     allSnapshots = [];
@@ -264,7 +264,7 @@ export async function loadDay(date: string): Promise<boolean> {
       allSnapshots.push({ timestamp: ts, vehicles });
 
       if (si % 200 === 0) {
-        playback.loadingProgress = `Building snapshots... ${Math.floor((si / totalSnaps) * 100)}%`;
+        playback.loadingProgress = `Processing snapshots... ${Math.floor((si / totalSnaps) * 100)}%`;
         notify();
         // Yield to the browser so the UI can update
         await new Promise((r) => setTimeout(r, 0));
@@ -292,7 +292,7 @@ export async function loadDay(date: string): Promise<boolean> {
       }
 
       if (si % 200 === 0) {
-        playback.loadingProgress = `Building timelines... ${Math.floor((si / allSnapshots.length) * 100)}%`;
+        playback.loadingProgress = `Preparing timelines... ${Math.floor((si / allSnapshots.length) * 100)}%`;
         notify();
         await new Promise((r) => setTimeout(r, 0));
       }
