@@ -51,6 +51,18 @@ function notify(): void { for (const fn of listeners) fn(); }
 
 export function getPlaybackState(): PlaybackState { return playback; }
 
+/**
+ * Speed multiplier for vehicle animations.
+ * - Live mode: returns 1 (normal speed)
+ * - Playback playing: returns playback.speed (10×, 60×, etc.)
+ * - Playback paused: returns 0 (freeze animations)
+ */
+export function getAnimationSpeedMultiplier(): number {
+  if (!playback.active) return 1; // live mode
+  if (!playback.playing) return 0; // paused
+  return playback.speed;
+}
+
 // ── Init DuckDB WASM ──
 
 async function initDuckDB(): Promise<void> {

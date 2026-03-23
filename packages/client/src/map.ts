@@ -3,6 +3,7 @@ import { Deck } from "@deck.gl/core";
 import type { VehiclePosition, TransportMode } from "./types.js";
 import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, selectVehicle } from "./store.js";
 import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
+import { getAnimationSpeedMultiplier } from "./playback.js";
 
 const INITIAL_VIEW = {
   longitude: 144.963,
@@ -102,7 +103,8 @@ export function initMap(
       const filters = getFilters();
 
       const filtered = currentVehicles.filter((v) => filters[v.mode]);
-      const display = computeFrame(filtered, dtMs);
+      const speedMult = getAnimationSpeedMultiplier();
+      const display = computeFrame(filtered, dtMs * speedMult);
 
       let selectedMode: TransportMode | null = null;
       if (selectedId) {

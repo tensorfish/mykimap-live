@@ -193,13 +193,18 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
       const newTarget = v.shapeDistTraveled;
 
       if (Math.abs(newTarget - prevTarget) > 0.5) {
-        const dt = (now - existing.lastUpdateAt) / 1000;
+        // Speed = distance / time between snapshots.
+        // Use the vehicle's timestamp (from the feed) not wall clock,
+        // so playback speed doesn't inflate the inferred speed.
+        const snapshotDt = Math.abs(v.timestamp - (existing as any).lastSnapshotTs || 0);
+        const dt = snapshotDt > 0 ? snapshotDt : (now - existing.lastUpdateAt) / 1000;
         if (dt > 0) {
           existing.speed = Math.abs(newTarget - prevTarget) / dt;
         }
         existing.direction = newTarget >= prevTarget ? 1 : -1;
         existing.targetDist = newTarget;
         existing.lastUpdateAt = now;
+        (existing as any).lastSnapshotTs = v.timestamp;
       }
     } else if (!existing && v.shapeDistTraveled >= 0) {
       // New vehicle — use prevShapeDistTraveled to start behind and animate forward
