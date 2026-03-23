@@ -131,6 +131,7 @@ interface VehicleAnim {
   direction: number;     // +1 or -1
   shapeKey: string;
   lastUpdateAt: number;  // ms — when targetDist was last set
+  lastSnapshotTs: number; // feed timestamp from last update (for speed calc)
 }
 
 const anims = new Map<string, VehicleAnim>();
@@ -193,10 +194,10 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
       const newTarget = v.shapeDistTraveled;
 
       if (Math.abs(newTarget - prevTarget) > 0.5) {
-        // Speed = distance / time between snapshots.
-        // Use the vehicle's timestamp (from the feed) not wall clock,
-        // so playback speed doesn't inflate the inferred speed.
-        const snapshotDt = Math.abs(v.timestamp - (existing as any).lastSnapshotTs || 0);
+        // Speed from snapshot timestamps (not wall clock — avoids
+        // inflated speed during rapid playback)
+        const prevTs = existing.lastSnapshotTs;
+        const snapshotDt = prevTs > 0 ? Math.abs(v.timestamp - prevTs) : 0;
         const dt = snapshotDt > 0 ? snapshotDt : (now - existing.lastUpdateAt) / 1000;
         if (dt > 0) {
           existing.speed = Math.abs(newTarget - prevTarget) / dt;
@@ -204,7 +205,7 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
         existing.direction = newTarget >= prevTarget ? 1 : -1;
         existing.targetDist = newTarget;
         existing.lastUpdateAt = now;
-        (existing as any).lastSnapshotTs = v.timestamp;
+        existing.lastSnapshotTs = v.timestamp;
       }
     } else if (!existing && v.shapeDistTraveled >= 0) {
       // New vehicle — use prevShapeDistTraveled to start behind and animate forward
@@ -216,11 +217,12 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
       anims.set(v.entityId, {
         currentDist: prevDist,
         targetDist: v.shapeDistTraveled,
-        tailDist: prevDist - (TRAIL_LENGTH_M * dir), // trail starts behind
+        tailDist: prevDist - (TRAIL_LENGTH_M * dir),
         speed: inferredSpeed,
         direction: dir,
         shapeKey,
         lastUpdateAt: now,
+        lastSnapshotTs: v.timestamp,
       });
     }
   }

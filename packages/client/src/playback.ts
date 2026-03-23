@@ -129,35 +129,51 @@ export async function loadDay(date: string): Promise<boolean> {
     const result = await conn.query(`SELECT * FROM snap ORDER BY timestamp, entity_id`);
     const rows = result.toArray();
 
-    const grouped = new Map<number, VehiclePosition[]>();
+    // Group rows by timestamp
+    const grouped = new Map<number, any[]>();
     for (const row of rows) {
       const ts = Number((row as any).timestamp);
       if (!grouped.has(ts)) grouped.set(ts, []);
-      grouped.get(ts)!.push({
-        entityId: (row as any).entity_id,
-        mode: (row as any).mode,
-        tripId: "",
-        routeId: (row as any).route_id,
-        startTime: "",
-        startDate: "",
-        vehicleId: (row as any).vehicle_id,
-        vehicleLabel: "",
-        latitude: (row as any).latitude,
-        longitude: (row as any).longitude,
-        bearing: (row as any).bearing,
-        speed: (row as any).speed,
-        timestamp: ts,
-        stale: Boolean((row as any).stale),
-        shapeDistTraveled: (row as any).shape_dist,
-        prevShapeDistTraveled: (row as any).shape_dist,
-        shapeId: "",
-        pathSegment: [],
-      });
+      grouped.get(ts)!.push(row);
     }
 
-    allSnapshots = [...grouped.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([timestamp, vehicles]) => ({ timestamp, vehicles }));
+    const sortedTimestamps = [...grouped.keys()].sort((a, b) => a - b);
+
+    // Build snapshots with prevShapeDistTraveled from the prior snapshot.
+    // This lets the client compute speed and start animating immediately.
+    const prevDists = new Map<string, number>(); // entityId → previous shape_dist
+
+    allSnapshots = sortedTimestamps.map((ts) => {
+      const rawRows = grouped.get(ts)!;
+      const vehicles: VehiclePosition[] = rawRows.map((row: any) => {
+        const entityId = row.entity_id;
+        const shapeDist = row.shape_dist;
+        const prev = prevDists.get(entityId) ?? shapeDist;
+        prevDists.set(entityId, shapeDist);
+
+        return {
+          entityId,
+          mode: row.mode,
+          tripId: "",
+          routeId: row.route_id,
+          startTime: "",
+          startDate: "",
+          vehicleId: row.vehicle_id,
+          vehicleLabel: "",
+          latitude: row.latitude,
+          longitude: row.longitude,
+          bearing: row.bearing,
+          speed: row.speed,
+          timestamp: ts,
+          stale: Boolean(row.stale),
+          shapeDistTraveled: shapeDist,
+          prevShapeDistTraveled: prev,
+          shapeId: "",
+          pathSegment: [],
+        };
+      });
+      return { timestamp: ts, vehicles };
+    });
 
     await conn.close();
 
