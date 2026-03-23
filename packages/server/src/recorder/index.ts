@@ -148,12 +148,18 @@ export async function recordSnapshot(vehicles: VehiclePosition[], headerTimestam
 
 export function listRecordingDates(): string[] {
   if (!existsSync(config.recordingDataDir)) return [];
-  // Scan for .duckdb files — works regardless of RECORDING_ENABLED
-  // (tools/generate-snapshot writes directly to this directory)
+  // List dates that have serveable data:
+  // - .parquet files (ready to serve)
+  // - .duckdb files for past dates (will be exported on first request)
+  const today = melbourneDate();
   const dates = new Set<string>();
   for (const f of readdirSync(config.recordingDataDir)) {
-    if (f.endsWith(".duckdb") && !f.endsWith(".duckdb.wal")) {
-      dates.add(f.replace(".duckdb", ""));
+    if (f.endsWith(".parquet")) {
+      dates.add(f.replace(".parquet", ""));
+    } else if (f.endsWith(".duckdb") && !f.endsWith(".duckdb.wal")) {
+      const dateStr = f.replace(".duckdb", "");
+      // Past dates can be exported on demand; today needs the parquet to exist
+      if (dateStr !== today) dates.add(dateStr);
     }
   }
   return [...dates].sort();

@@ -52,7 +52,7 @@ export function initPlaybackUI(): void {
     historyBtn.removeAttribute("disabled");
 
     if (dates.length === 0) {
-      alert("No recordings available. Enable RECORDING_ENABLED on the server.");
+      alert("No recordings available yet. The server exports snapshots every 5 minutes — please try again shortly.");
       return;
     }
 
