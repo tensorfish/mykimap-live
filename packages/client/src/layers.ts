@@ -120,18 +120,17 @@ function sliceShape(shape: CachedShape, fromDist: number, toDist: number): Array
 // Each frame, currentDist moves toward targetDist at the inferred speed.
 // When it reaches targetDist, the arrow stops until the next update.
 
-/** Number of position updates the trail spans */
-const TRAIL_UPDATES = 3;
+/** Trail length in meters behind the arrow */
+const TRAIL_LENGTH_M = 800;
 
 interface VehicleAnim {
   currentDist: number;   // meters along shape — where the arrow is now
   targetDist: number;    // meters along shape — where the server says it should be
+  tailDist: number;      // meters along shape — where the trail tail is
   speed: number;         // meters per second
   direction: number;     // +1 or -1
   shapeKey: string;
   lastUpdateAt: number;  // ms — when targetDist was last set
-  /** Last N known shapeDistTraveled values — trail spans from oldest to currentDist */
-  recentDists: number[];
 }
 
 const anims = new Map<string, VehicleAnim>();
@@ -157,10 +156,6 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
   const firstVehicles = new Map<string, VehiclePosition>();
   for (const v of firstTick.vehicles) firstVehicles.set(v.entityId, v);
 
-  // Build recentDists from evenly spaced ticks across the backlog
-  // so the trail shows the full travel distance from backlog start to end.
-  const sampleIndices = [0, Math.floor(backlog.length / 3), Math.floor(backlog.length * 2 / 3), backlog.length - 1];
-
   for (const [entityId, anim] of anims) {
     // Starting position: oldest tick in backlog
     const firstV = firstVehicles.get(entityId);
@@ -174,20 +169,8 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
       }
     }
 
-    // Build recentDists from sampled backlog ticks
-    const dists: number[] = [];
-    for (const idx of sampleIndices) {
-      const tick = backlog[idx];
-      if (!tick) continue;
-      const v = tick.vehicles.find((v) => v.entityId === entityId);
-      if (v && v.shapeDistTraveled >= 0) {
-        const last = dists[dists.length - 1];
-        if (last === undefined || Math.abs(v.shapeDistTraveled - last) > 0.5) {
-          dists.push(v.shapeDistTraveled);
-        }
-      }
-    }
-    if (dists.length > 0) anim.recentDists = dists;
+    // Set tail behind the starting position for immediate trail
+    anim.tailDist = anim.currentDist - (TRAIL_LENGTH_M * anim.direction);
   }
 }
 
@@ -217,12 +200,6 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
         existing.direction = newTarget >= prevTarget ? 1 : -1;
         existing.targetDist = newTarget;
         existing.lastUpdateAt = now;
-
-        // Track recent positions for trail length
-        existing.recentDists.push(newTarget);
-        if (existing.recentDists.length > TRAIL_UPDATES + 1) {
-          existing.recentDists.shift();
-        }
       }
     } else if (!existing && v.shapeDistTraveled >= 0) {
       // New vehicle — use prevShapeDistTraveled to start behind and animate forward
@@ -230,16 +207,15 @@ export function feedTick(vehicles: VehiclePosition[], isBacklog = false): void {
       const dist = Math.abs(v.shapeDistTraveled - prevDist);
       const inferredSpeed = v.speed > 0 ? v.speed : (dist > 0 ? dist / 30 : 0); // ~30s between polls
 
+      const dir = v.shapeDistTraveled >= prevDist ? 1 : -1;
       anims.set(v.entityId, {
         currentDist: prevDist,
         targetDist: v.shapeDistTraveled,
+        tailDist: prevDist - (TRAIL_LENGTH_M * dir), // trail starts behind
         speed: inferredSpeed,
-        direction: v.shapeDistTraveled >= prevDist ? 1 : -1,
+        direction: dir,
         shapeKey,
         lastUpdateAt: now,
-        recentDists: prevDist !== v.shapeDistTraveled
-          ? [prevDist, v.shapeDistTraveled]
-          : [v.shapeDistTraveled],
       });
     }
   }
@@ -296,6 +272,34 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
 
     // Clamp to shape bounds
     anim.currentDist = Math.max(0, Math.min(anim.currentDist, shape.totalDist));
+
+    // Advance the trail tail — follows the arrow at the same speed,
+    // maintaining TRAIL_LENGTH_M behind it. When the arrow stops,
+    // the tail keeps advancing until it catches up = trail "eats itself".
+    const idealTail = anim.currentDist - (TRAIL_LENGTH_M * anim.direction);
+    if (anim.direction > 0) {
+      // Moving forward: tail should be behind (lower dist)
+      if (anim.tailDist < idealTail) {
+        anim.tailDist += anim.speed * (dtMs / 1000);
+        anim.tailDist = Math.min(anim.tailDist, idealTail);
+      }
+      // If arrow stopped but tail hasn't caught up, keep eating
+      if (anim.currentDist === anim.targetDist && anim.tailDist < anim.currentDist) {
+        anim.tailDist += anim.speed * (dtMs / 1000);
+        anim.tailDist = Math.min(anim.tailDist, anim.currentDist);
+      }
+    } else {
+      // Moving backward: tail should be ahead (higher dist)
+      if (anim.tailDist > idealTail) {
+        anim.tailDist -= anim.speed * (dtMs / 1000);
+        anim.tailDist = Math.max(anim.tailDist, idealTail);
+      }
+      if (anim.currentDist === anim.targetDist && anim.tailDist > anim.currentDist) {
+        anim.tailDist -= anim.speed * (dtMs / 1000);
+        anim.tailDist = Math.max(anim.tailDist, anim.currentDist);
+      }
+    }
+    anim.tailDist = Math.max(0, Math.min(anim.tailDist, shape.totalDist));
 
     // Sample position from the route shape
     const pos = sampleShapeAtDist(shape, anim.currentDist);
@@ -406,13 +410,11 @@ export function createTrailLayer(
 
     const anim = anims.get(v.entityId);
     const shape = shapeCache.get(getShapeCacheKey(v));
-    if (!anim || !shape || anim.speed < 0.5) continue;
-    if (anim.recentDists.length < 2) continue;
+    if (!anim || !shape) continue;
 
-    // Trail spans from the oldest tracked position to the current arrow position.
-    // recentDists holds the last TRAIL_UPDATES+1 shapeDist values from poll updates.
-    const oldestDist = anim.recentDists[0]!;
-    const trailPath = sliceShape(shape, oldestDist, anim.currentDist);
+    // Trail = shape from tailDist to currentDist.
+    // Both are animated — tail follows the arrow, catches up when arrow stops.
+    const trailPath = sliceShape(shape, anim.tailDist, anim.currentDist);
     if (trailPath.length < 2) continue;
 
     data.push({ entityId: v.entityId, path: trailPath, mode: v.mode });
