@@ -173,7 +173,7 @@ export async function loadDay(date: string): Promise<boolean> {
 
     await initDuckDB();
 
-    playback.loadingProgress = "Downloading recording...";
+    playback.loadingProgress = "Downloading snapshot...";
     notify();
 
     const resp = await fetch(`/data/snapshots/${date}`);
@@ -191,8 +191,8 @@ export async function loadDay(date: string): Promise<boolean> {
       chunks.push(value);
       received += value.length;
       playback.loadingProgress = contentLength > 0
-        ? `Downloading... ${Math.floor((received / contentLength) * 100)}%`
-        : `Downloading... ${(received / 1024).toFixed(0)} KB`;
+        ? `Downloading snapshot... ${Math.floor((received / contentLength) * 100)}%`
+        : `Downloading snapshot... ${(received / 1024).toFixed(0)} KB`;
       notify();
     }
 
@@ -311,7 +311,9 @@ export async function loadDay(date: string): Promise<boolean> {
       speed: 1, playing: false,
     };
 
-    playback.loadingProgress = `${allSnapshots.length} snapshots loaded`;
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
+    const suffix = date === today ? " (updated every 5 min)" : "";
+    playback.loadingProgress = `${allSnapshots.length} snapshots loaded${suffix}`;
     notify();
     return true;
   } catch (error) {
