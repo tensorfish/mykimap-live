@@ -97,8 +97,21 @@ function sliceShape(shape: CachedShape, fromDist: number, toDist: number): Array
   return result;
 }
 
-// Cache snap results to avoid re-computing for the same lat/lon
-const snapCache = new Map<string, { lat: number; lon: number; dist: number }>();
+// Cache snap results + last matched segment index for search acceleration
+const snapCache = new Map<string, { lat: number; lon: number; dist: number; segIdx: number }>();
+
+/** Search radius around last known segment before falling back to full scan */
+const SNAP_SEARCH_RADIUS = 30;
+
+function snapToSegment(shape: CachedShape, i: number, lat: number, lon: number): { d: number; shapeDist: number } {
+  const a = shape.path[i]!, b = shape.path[i + 1]!;
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq > 0 ? Math.max(0, Math.min(1, ((lon - a[0]) * dx + (lat - a[1]) * dy) / lenSq)) : 0;
+  const projLon = a[0] + t * dx, projLat = a[1] + t * dy;
+  const d = Math.sqrt((lat - projLat) ** 2 + (lon - projLon) ** 2);
+  return { d, shapeDist: shape.dists[i]! + t * (shape.dists[i + 1]! - shape.dists[i]!) };
+}
 
 function clientSnapToShape(v: VehiclePosition): number {
   if (v.shapeDistTraveled >= 0) return v.shapeDistTraveled;
@@ -111,21 +124,30 @@ function clientSnapToShape(v: VehiclePosition): number {
     return cached.dist;
   }
 
-  let bestDist = Infinity, bestShapeDist = 0;
-  for (let i = 0; i < shape.path.length - 1; i++) {
-    const a = shape.path[i]!, b = shape.path[i + 1]!;
-    const dx = b[0] - a[0], dy = b[1] - a[1];
-    const lenSq = dx * dx + dy * dy;
-    const t = lenSq > 0 ? Math.max(0, Math.min(1, ((v.longitude - a[0]) * dx + (v.latitude - a[1]) * dy) / lenSq)) : 0;
-    const projLon = a[0] + t * dx, projLat = a[1] + t * dy;
-    const d = Math.sqrt((v.latitude - projLat) ** 2 + (v.longitude - projLon) ** 2);
-    if (d < bestDist) {
-      bestDist = d;
-      bestShapeDist = shape.dists[i]! + t * (shape.dists[i + 1]! - shape.dists[i]!);
+  const n = shape.path.length - 1;
+  let bestDist = Infinity, bestShapeDist = 0, bestIdx = 0;
+
+  // Try local search around the last matched segment first
+  const lastIdx = cached?.segIdx ?? 0;
+  const lo = Math.max(0, lastIdx - SNAP_SEARCH_RADIUS);
+  const hi = Math.min(n, lastIdx + SNAP_SEARCH_RADIUS);
+
+  for (let i = lo; i < hi; i++) {
+    const { d, shapeDist } = snapToSegment(shape, i, v.latitude, v.longitude);
+    if (d < bestDist) { bestDist = d; bestShapeDist = shapeDist; bestIdx = i; }
+  }
+
+  // If local search found a close match (< ~50m in degrees), use it.
+  // Otherwise fall back to full scan.
+  if (bestDist > 0.0005) {
+    for (let i = 0; i < n; i++) {
+      if (i >= lo && i < hi) continue; // already searched
+      const { d, shapeDist } = snapToSegment(shape, i, v.latitude, v.longitude);
+      if (d < bestDist) { bestDist = d; bestShapeDist = shapeDist; bestIdx = i; }
     }
   }
 
-  snapCache.set(v.entityId, { lat: v.latitude, lon: v.longitude, dist: bestShapeDist });
+  snapCache.set(v.entityId, { lat: v.latitude, lon: v.longitude, dist: bestShapeDist, segIdx: bestIdx });
   return bestShapeDist;
 }
 

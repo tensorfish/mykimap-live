@@ -363,6 +363,20 @@
       }
       @keyframes spin { to { transform: rotate(360deg); } }
       #loading-text { color: #aaa; font-size: 13px; }
+      #loading-bar-wrap {
+        width: 100%;
+        height: 3px;
+        background: rgba(255,255,255,0.08);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      #loading-bar {
+        height: 100%;
+        width: 0%;
+        background: #fff;
+        border-radius: 2px;
+        transition: width 0.3s;
+      }
       #loading-cancel {
         background: none;
         border: 1px solid rgba(255,255,255,0.15);
@@ -377,16 +391,21 @@
       #loading-cancel:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
 
       /* ── Mobile ── */
+      @media (max-width: 900px) {
+        #filters { top: auto; bottom: 50px; left: 8px; right: 8px; }
+      }
       @media (max-width: 640px) {
-        #status { top: auto; bottom: 12px; left: 8px; right: 8px; font-size: 12px; padding: 6px 10px; }
-        #filters { top: 8px; left: 8px; right: 8px; font-size: 11px; padding: 6px 8px; gap: 4px; }
+        #status { top: auto; bottom: 50px; left: 8px; right: 8px; font-size: 12px; padding: 6px 10px; }
+        #filters { top: 8px; left: 8px; right: 8px; bottom: auto; font-size: 11px; padding: 6px 8px; gap: 4px; }
         .filter-chip { padding: 3px 7px; font-size: 11px; }
         #panel {
           top: auto; bottom: 0; left: 0; right: 0;
           width: 100%; height: 60%;
           border-radius: 16px 16px 0 0;
           border: none; border-top: 1px solid rgba(255,255,255,0.1);
+          transform: translateY(100%);
         }
+        #panel.open { transform: translateY(0); }
       }
     </style>
   </head>
@@ -436,6 +455,7 @@
       <div id="loading-modal">
         <div id="loading-spinner"></div>
         <div id="loading-text">Loading...</div>
+        <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
         <button id="loading-cancel">Cancel</button>
       </div>
     </div>

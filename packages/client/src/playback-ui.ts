@@ -29,6 +29,7 @@ export function initPlaybackUI(): void {
   const loadingOverlay = document.getElementById("loading-overlay")!;
   const loadingText = document.getElementById("loading-text")!;
   const loadingCancel = document.getElementById("loading-cancel")!;
+  const loadingBar = document.getElementById("loading-bar")!;
 
   loadingCancel.addEventListener("click", () => {
     stopPlayback();
@@ -122,6 +123,9 @@ export function initPlaybackUI(): void {
     if (state.loading) {
       loadingOverlay.classList.add("visible");
       loadingText.textContent = state.loadingProgress;
+      // Extract percentage from progress text (e.g. "Downloading... 45%")
+      const pctMatch = state.loadingProgress.match(/(\d+)%/);
+      loadingBar.style.width = pctMatch ? `${pctMatch[1]}%` : "0%";
       playBtn.setAttribute("disabled", "");
       slider.setAttribute("disabled", "");
       return;
