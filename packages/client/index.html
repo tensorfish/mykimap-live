@@ -171,31 +171,52 @@
       }
       #history-btn:hover { color: #fff; background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.35); }
 
-      /* ── Loading overlay ── */
+      /* ── Loading modal ── */
       #loading-overlay {
         display: none;
         position: absolute;
         inset: 0;
         z-index: 10;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(4px);
-        color: #fff;
-        font-size: 15px;
-        flex-direction: column;
+        background: rgba(0, 0, 0, 0.4);
         align-items: center;
         justify-content: center;
-        gap: 12px;
       }
       #loading-overlay.visible { display: flex; }
+      #loading-modal {
+        background: rgba(15, 15, 20, 0.95);
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 12px;
+        padding: 28px 36px;
+        color: #fff;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        min-width: 240px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+        backdrop-filter: blur(16px);
+      }
       #loading-spinner {
-        width: 32px; height: 32px;
-        border: 3px solid rgba(255,255,255,0.15);
+        width: 28px; height: 28px;
+        border: 2px solid rgba(255,255,255,0.12);
         border-top-color: #fff;
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
       }
       @keyframes spin { to { transform: rotate(360deg); } }
       #loading-text { color: #aaa; font-size: 13px; }
+      #loading-cancel {
+        background: none;
+        border: 1px solid rgba(255,255,255,0.15);
+        color: #888;
+        border-radius: 4px;
+        padding: 4px 16px;
+        cursor: pointer;
+        font-size: 12px;
+        margin-top: 4px;
+        transition: all 0.15s;
+      }
+      #loading-cancel:hover { color: #fff; border-color: rgba(255,255,255,0.3); }
 
       /* ── Mobile ── */
       @media (max-width: 640px) {
@@ -231,8 +252,11 @@
     </div>
 
     <div id="loading-overlay">
-      <div id="loading-spinner"></div>
-      <div id="loading-text">Loading...</div>
+      <div id="loading-modal">
+        <div id="loading-spinner"></div>
+        <div id="loading-text">Loading...</div>
+        <button id="loading-cancel">Cancel</button>
+      </div>
     </div>
 
     <div id="panel">

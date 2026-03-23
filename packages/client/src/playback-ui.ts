@@ -23,6 +23,13 @@ export function initPlaybackUI(): void {
   const speedSelect = document.getElementById("pb-speed")! as HTMLSelectElement;
   const loadingOverlay = document.getElementById("loading-overlay")!;
   const loadingText = document.getElementById("loading-text")!;
+  const loadingCancel = document.getElementById("loading-cancel")!;
+
+  loadingCancel.addEventListener("click", () => {
+    stopPlayback();
+    loadingOverlay.classList.remove("visible");
+    exitPlayback();
+  });
 
   // History button
   historyBtn.addEventListener("click", async () => {
