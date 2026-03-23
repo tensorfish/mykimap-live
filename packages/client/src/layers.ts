@@ -326,9 +326,13 @@ export function feedTick(vehicles: VehiclePosition[]): void {
 
         if (snapDt > 0 && moveDist > 1) {
           existing.speed = moveDist / snapDt;
-          // Record into heatmap — only when vehicle actually moved
-          recordSegmentSpeed(v.routeId, v.mode, dist, existing.speed, v.timestamp);
         }
+      }
+
+      // Record into heatmap when vehicle timestamp changes (actual feed update).
+      // Use the animation speed which accumulates correctly across ticks.
+      if (v.timestamp !== existing.lastTs && existing.lastTs > 0) {
+        recordSegmentSpeed(getShapeCacheKey(v), v.mode, dist, existing.speed, v.timestamp);
       }
 
       existing.lastTs = v.timestamp;
