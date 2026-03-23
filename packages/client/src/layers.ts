@@ -1,5 +1,5 @@
 import { IconLayer, PathLayer } from "@deck.gl/layers";
-import type { VehiclePosition, TransportMode } from "./types.js";
+import type { VehiclePosition, TransportMode, SegmentSpeed } from "./types.js";
 import { createArrowIconURL, ARROW_ICON_MAPPING } from "./icons.js";
 
 // ── Colors ──
@@ -149,20 +149,27 @@ const ANIM_SPEED_MS = 15; // m/s default animation speed
 // Segments are colored green → yellow → red by speed.
 // Old readings decay so the heatmap reflects current conditions.
 
-const SEGMENT_LEN = 200; // meters per heatmap segment
-const HEATMAP_DECAY = 0.15; // seconds — time constant for exponential decay
-const HEATMAP_MAX_AGE = 120; // seconds — discard segments with no update in this long
+// ── Congestion heatmap ──
+//
+// On connect, the server sends a 10-min snapshot of per-segment speeds
+// to seed the client. After that, the client accumulates locally from
+// vehicle movements in feedTick.
 
-/** Per-route heatmap data */
-interface RouteHeatmap {
-  /** Segment speeds in m/s (NaN = no data) */
-  speeds: Float32Array;
-  /** Last update time per segment (performance.now() in ms) */
-  lastUpdate: Float32Array;
-  segmentCount: number;
+const SEGMENT_LEN = 200; // must match server CONGESTION_SEGMENT_LEN
+const HEATMAP_WINDOW_S = 600; // 10-minute sliding window
+const HEATMAP_MAX_SAMPLES = 60; // ring buffer cap per segment
+
+interface SpeedSample {
+  ts: number;    // vehicle timestamp (POSIX seconds)
+  speed: number; // m/s
 }
 
-const heatmaps = new Map<string, RouteHeatmap>();
+interface RouteHeatmap {
+  mode: TransportMode;
+  segments: Map<number, SpeedSample[]>;
+}
+
+const heatmapData = new Map<string, RouteHeatmap>();
 
 /** Mode baseline speeds (m/s) for color normalization */
 const MODE_BASELINE_SPEED: Record<TransportMode, number> = {
@@ -172,47 +179,65 @@ const MODE_BASELINE_SPEED: Record<TransportMode, number> = {
   vline: 28,   // ~100 km/h
 };
 
-function getOrCreateHeatmap(shapeKey: string): RouteHeatmap | null {
-  const existing = heatmaps.get(shapeKey);
-  if (existing) return existing;
-  const shape = shapeCache.get(shapeKey);
-  if (!shape || shape.totalDist < SEGMENT_LEN) return null;
-  const segmentCount = Math.ceil(shape.totalDist / SEGMENT_LEN);
-  const speeds = new Float32Array(segmentCount);
-  speeds.fill(NaN);
-  const lastUpdate = new Float32Array(segmentCount);
-  const hm: RouteHeatmap = { speeds, lastUpdate, segmentCount };
-  heatmaps.set(shapeKey, hm);
-  return hm;
+/**
+ * Seed heatmap from server-provided SegmentSpeed snapshot.
+ * Called once on WebSocket init. Creates synthetic samples
+ * so the client's sliding window has data immediately.
+ */
+export function seedHeatmap(congestion: SegmentSpeed[], nowTs: number): void {
+  heatmapData.clear();
+  for (const seg of congestion) {
+    let route = heatmapData.get(seg.routeId);
+    if (!route) {
+      route = { mode: seg.mode, segments: new Map() };
+      heatmapData.set(seg.routeId, route);
+    }
+    // Spread the server's sample count across the window as synthetic samples
+    // so the sliding window average matches the server's value
+    const samples: SpeedSample[] = [];
+    const interval = HEATMAP_WINDOW_S / Math.max(seg.sampleCount, 1);
+    for (let i = 0; i < seg.sampleCount; i++) {
+      samples.push({ ts: nowTs - HEATMAP_WINDOW_S + i * interval, speed: seg.avgSpeed });
+    }
+    route.segments.set(seg.segIdx, samples);
+  }
 }
 
-/** Record a vehicle's speed at its current position on the route */
-function recordHeatmapSpeed(shapeKey: string, dist: number, speed: number, now: number): void {
-  const hm = getOrCreateHeatmap(shapeKey);
-  if (!hm) return;
-  const segIdx = Math.min(Math.floor(dist / SEGMENT_LEN), hm.segmentCount - 1);
-  if (segIdx < 0) return;
-
-  const prev = hm.speeds[segIdx]!;
-  if (isNaN(prev)) {
-    hm.speeds[segIdx] = speed;
-  } else {
-    // Exponential moving average
-    hm.speeds[segIdx] = prev * 0.7 + speed * 0.3;
+/** Record a speed observation from a vehicle movement */
+function recordSegmentSpeed(routeId: string, mode: TransportMode, dist: number, speed: number, vehicleTs: number): void {
+  let route = heatmapData.get(routeId);
+  if (!route) {
+    route = { mode, segments: new Map() };
+    heatmapData.set(routeId, route);
   }
-  hm.lastUpdate[segIdx] = now;
+  const segIdx = Math.max(0, Math.floor(dist / SEGMENT_LEN));
+  let buf = route.segments.get(segIdx);
+  if (!buf) {
+    buf = [];
+    route.segments.set(segIdx, buf);
+  }
+  // Skip duplicate timestamps
+  if (buf.length > 0 && buf[buf.length - 1]!.ts === vehicleTs) return;
+  buf.push({ ts: vehicleTs, speed });
+  if (buf.length > HEATMAP_MAX_SAMPLES) buf.shift();
+}
+
+/** Get average speed for a segment within the sliding window */
+function segmentAvgSpeed(samples: SpeedSample[], cutoff: number): { avg: number; count: number } {
+  let sum = 0, count = 0;
+  for (let i = samples.length - 1; i >= 0; i--) {
+    if (samples[i]!.ts < cutoff) break;
+    sum += samples[i]!.speed;
+    count++;
+  }
+  return { avg: count > 0 ? sum / count : NaN, count };
 }
 
 /** Speed ratio (0–1) to RGB color: red → yellow → green */
 function speedToColor(ratio: number): [number, number, number, number] {
-  // ratio: 0 = stopped, 1 = at or above baseline speed
   const r = Math.min(1, 2 - 2 * ratio);
   const g = Math.min(1, 2 * ratio);
   return [Math.floor(r * 255), Math.floor(g * 200), 30, 160];
-}
-
-export function clearHeatmaps(): void {
-  heatmaps.clear();
 }
 
 interface VehicleAnim {
@@ -231,7 +256,6 @@ const anims = new Map<string, VehicleAnim>();
 export function clearAnimations(): void {
   anims.clear();
   snapCache.clear();
-  heatmaps.clear();
 }
 
 // ── Feed data ──
@@ -284,7 +308,6 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
 
 export function feedTick(vehicles: VehiclePosition[]): void {
   const seen = new Set<string>();
-  const now = performance.now();
 
   for (const v of vehicles) {
     seen.add(v.entityId);
@@ -301,20 +324,12 @@ export function feedTick(vehicles: VehiclePosition[]): void {
       if (moveDist > 0.5) {
         existing.targets.push(dist);
 
-        // Speed = distance to cover / time between this update and the last.
-        // Use vehicle timestamps (not wall clock) for correct playback speed.
-        // dtMs in computeFrame is already multiplied by speed multiplier,
-        // so this speed should be in real m/s.
         if (snapDt > 0 && moveDist > 1) {
           existing.speed = moveDist / snapDt;
+          // Record into heatmap — only when vehicle actually moved
+          recordSegmentSpeed(v.routeId, v.mode, dist, existing.speed, v.timestamp);
         }
       }
-
-      // Heatmap: record speed for ALL vehicles, including stationary ones.
-      // If vehicle didn't move, realSpeed = 0. This ensures stopped vehicles
-      // correctly show red, not stale green from their last movement.
-      const realSpeed = (snapDt > 0 && moveDist > 1) ? moveDist / snapDt : 0;
-      recordHeatmapSpeed(existing.shapeKey, dist, realSpeed, now);
 
       existing.lastTs = v.timestamp;
     } else {
@@ -506,22 +521,12 @@ export function createTrailLayer(vehicles: VehiclePosition[], selectedId: string
   });
 }
 
-export function createHeatmapLayer(vehicles: VehiclePosition[]): PathLayer {
-  const now = performance.now();
-  const maxAgeMs = HEATMAP_MAX_AGE * 1000;
-
-  // Collect the set of route shape keys visible on screen
-  const seenKeys = new Set<string>();
-  for (const v of vehicles) {
-    seenKeys.add(getShapeCacheKey(v));
-  }
-
-  // Build per-vehicle mode lookup for baseline speed
-  const keyToMode = new Map<string, TransportMode>();
-  for (const v of vehicles) {
-    const key = getShapeCacheKey(v);
-    if (!keyToMode.has(key)) keyToMode.set(key, v.mode);
-  }
+/**
+ * Render congestion heatmap from locally accumulated speed data.
+ * Seeded by server on connect, then maintained by feedTick.
+ */
+export function createHeatmapLayer(nowTs: number): PathLayer {
+  const cutoff = nowTs - HEATMAP_WINDOW_S;
 
   interface HeatSegment {
     path: Array<[number, number]>;
@@ -530,28 +535,25 @@ export function createHeatmapLayer(vehicles: VehiclePosition[]): PathLayer {
 
   const segments: HeatSegment[] = [];
 
-  for (const key of seenKeys) {
-    const shape = shapeCache.get(key);
-    const hm = heatmaps.get(key);
-    if (!shape || !hm) continue;
+  for (const [routeId, route] of heatmapData) {
+    const shape = shapeCache.get(routeId);
+    if (!shape) continue;
 
-    const baseline = MODE_BASELINE_SPEED[keyToMode.get(key) ?? "tram"];
+    const baseline = MODE_BASELINE_SPEED[route.mode] ?? 10;
 
-    for (let i = 0; i < hm.segmentCount; i++) {
-      const speed = hm.speeds[i]!;
-      const age = now - hm.lastUpdate[i]!;
-      if (isNaN(speed) || age > maxAgeMs) continue;
+    for (const [segIdx, samples] of route.segments) {
+      const { avg, count } = segmentAvgSpeed(samples, cutoff);
+      if (isNaN(avg) || count < 2) continue;
 
-      // Fade out old segments
-      const ageFade = Math.max(0, 1 - age / maxAgeMs);
-      const ratio = Math.min(1, speed / baseline);
+      const ratio = Math.min(1, avg / baseline);
       const color = speedToColor(ratio);
-      color[3] = Math.floor(color[3]! * ageFade);
-      if (color[3] < 10) continue;
 
-      // Slice shape for this segment
-      const fromDist = i * SEGMENT_LEN;
-      const toDist = Math.min((i + 1) * SEGMENT_LEN, shape.totalDist);
+      // Brighter with more samples (more confidence)
+      const confidence = Math.min(1, count / 6);
+      color[3] = Math.floor(80 + 100 * confidence);
+
+      const fromDist = segIdx * SEGMENT_LEN;
+      const toDist = Math.min((segIdx + 1) * SEGMENT_LEN, shape.totalDist);
       const path = sliceShape(shape, fromDist, toDist);
       if (path.length < 2) continue;
 

@@ -47,10 +47,19 @@ export interface ServiceAlert {
   }>;
 }
 
+export interface SegmentSpeed {
+  routeId: string;
+  mode: TransportMode;
+  segIdx: number;
+  avgSpeed: number;
+  sampleCount: number;
+}
+
 export interface WorldState {
   timestamp: number;
   vehicles: VehiclePosition[];
   alerts: ServiceAlert[];
+  congestion: SegmentSpeed[];
   serverState: ServerState;
   seq: number;
 }

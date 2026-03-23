@@ -97,12 +97,28 @@ export interface ServiceAlert {
   }>;
 }
 
+// ── Congestion heatmap ──
+
+export interface SegmentSpeed {
+  /** Shape key (routeId) */
+  routeId: string;
+  /** Mode for baseline speed normalization */
+  mode: TransportMode;
+  /** Segment index (segment = segIdx * SEGMENT_LEN to (segIdx+1) * SEGMENT_LEN meters) */
+  segIdx: number;
+  /** Average speed in m/s over the sliding window */
+  avgSpeed: number;
+  /** Number of samples in the window */
+  sampleCount: number;
+}
+
 // ── World state (broadcast to clients) ──
 
 export interface WorldState {
   timestamp: number;
   vehicles: VehiclePosition[];
   alerts: ServiceAlert[];
+  congestion: SegmentSpeed[];
   serverState: ServerState;
   seq: number;
 }

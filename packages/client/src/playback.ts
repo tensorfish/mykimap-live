@@ -146,6 +146,7 @@ function feedCurrentSnapshot(): void {
     timestamp: snap.timestamp,
     vehicles,
     alerts: [],
+    congestion: [],
     serverState: "RUNNING", seq: idx,
   });
 }

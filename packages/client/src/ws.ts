@@ -57,6 +57,10 @@ export function connect(): void {
       if (msg.type === "init") {
         // Initial backlog — emit event for the map to process
         window.dispatchEvent(new CustomEvent("vehicle-backlog", { detail: { backlog: msg.backlog } }));
+        // Seed congestion heatmap with server's 10-min snapshot
+        if (msg.congestion) {
+          window.dispatchEvent(new CustomEvent("congestion-seed", { detail: { congestion: msg.congestion } }));
+        }
         // Apply the last tick as current state
         const backlog = msg.backlog as WorldState[];
         if (backlog.length > 0) applyTick(backlog[backlog.length - 1]!);

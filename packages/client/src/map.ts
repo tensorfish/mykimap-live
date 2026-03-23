@@ -2,7 +2,7 @@ import mapboxgl from "mapbox-gl";
 import { Deck } from "@deck.gl/core";
 import type { VehiclePosition, TransportMode } from "./types.js";
 import { store, getVehicles, getSelectedEntityId, getRouteShape, getFilters, getRouteFilter, getVehicleFilter, getHeatmapEnabled, selectVehicle } from "./store.js";
-import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, createHeatmapLayer, feedTick, feedBacklog, computeFrame } from "./layers.js";
+import { createVehicleLayer, createTrailLayer, createRouteShapeLayer, createHeatmapLayer, feedTick, feedBacklog, seedHeatmap, computeFrame } from "./layers.js";
 import { getAnimationSpeedMultiplier, advancePlayback } from "./playback.js";
 
 const INITIAL_VIEW = {
@@ -84,6 +84,11 @@ export function initMap(
     feedBacklog(e.detail.backlog);
   }) as EventListener);
 
+  window.addEventListener("congestion-seed", ((e: CustomEvent) => {
+    const nowTs = Math.floor(Date.now() / 1000);
+    seedHeatmap(e.detail.congestion, nowTs);
+  }) as EventListener);
+
   store.subscribe(() => {
     const vehicles = getVehicles();
     if (vehicles.length === 0) return;
@@ -132,7 +137,8 @@ export function initMap(
       ];
 
       if (getHeatmapEnabled()) {
-        layers.push(createHeatmapLayer(filtered));
+        const wsTs = store.state.worldState?.timestamp ?? Math.floor(Date.now() / 1000);
+        layers.push(createHeatmapLayer(wsTs));
       }
 
       layers.push(

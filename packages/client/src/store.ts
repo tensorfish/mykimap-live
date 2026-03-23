@@ -1,5 +1,5 @@
 import { Store } from "@tanstack/store";
-import type { WorldState, ClientState } from "./types.js";
+import type { WorldState, ClientState, SegmentSpeed } from "./types.js";
 import { tryTransition } from "./state-machine.js";
 
 // ── App state ──
@@ -43,6 +43,10 @@ export function getVehicles() {
 
 export function getAlerts() {
   return store.state.worldState?.alerts ?? [];
+}
+
+export function getCongestion(): SegmentSpeed[] {
+  return store.state.worldState?.congestion ?? [];
 }
 
 export function getSelectedEntityId(): string | null {

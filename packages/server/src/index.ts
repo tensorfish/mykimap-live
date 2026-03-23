@@ -6,6 +6,7 @@ import { processSnapshot, interpolate } from "./interpolation/index.js";
 import { addClient, removeClient, broadcast, clientCount } from "./broadcast/index.js";
 import { loadShapes, shapeStats, getShapeForTrip, getShapeForRoute } from "./shapes/index.js";
 import { initRecorder, recordSnapshot, closeRecorder, listRecordingDates, exportParquet } from "./recorder/index.js";
+import { recordCongestion, getCongestion } from "./congestion/index.js";
 import { log } from "./logger.js";
 import type { VehiclePosition, ServiceAlert, WorldState } from "./types.js";
 
@@ -131,6 +132,10 @@ async function pollCycle(): Promise<void> {
         currentVehicles = processSnapshot(result.vehicles, result.headerTimestamp);
         currentAlerts = result.alerts;
         lastHeaderTimestamp = result.headerTimestamp;
+
+        // Record vehicle speeds for congestion heatmap
+        recordCongestion(currentVehicles, result.headerTimestamp);
+
         log("info", `Fresh data`, { headerTimestamp: result.headerTimestamp, vehicles: currentVehicles.length });
       } else {
         log("debug", `Duplicate poll skipped (header timestamp unchanged: ${result.headerTimestamp})`);
@@ -193,6 +198,7 @@ function broadcastCycle(): void {
     timestamp: Math.floor(now / 1000),
     vehicles: interpolated,
     alerts: currentAlerts,
+    congestion: [],
     serverState: sm.state,
     seq: broadcastSeq,
   };
@@ -289,10 +295,15 @@ function startServer(): void {
       open(ws) {
         addClient(ws);
 
-        // Send backlog of recent ticks so the client can build a
-        // continuous path queue before animation starts.
+        // Send backlog + congestion snapshot so the client has
+        // initial 10-min heatmap data without waiting to accumulate.
         if (sm.isBroadcasting && tickBacklog.length > 0) {
-          ws.send(JSON.stringify({ type: "init", backlog: tickBacklog }));
+          const nowS = Math.floor(Date.now() / 1000);
+          ws.send(JSON.stringify({
+            type: "init",
+            backlog: tickBacklog,
+            congestion: getCongestion(nowS),
+          }));
         }
       },
       message(_ws, _message) {
