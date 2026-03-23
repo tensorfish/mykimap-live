@@ -39,25 +39,28 @@ OPENDATA_VIC_API_KEY=your-transport-vic-key
 VITE_MAPBOX_ACCESS_TOKEN=your-mapbox-token
 ```
 
-### Run
+### Run (production)
 
 ```bash
-# Start the server (port 3000)
+bun run build
+bun run start
+```
+
+Open http://localhost:3000
+
+A single process serves the API, WebSocket, and built client files. On first run the server downloads the GTFS Schedule (~191 MB) to build the route shape index. This is cached in `.cache/gtfs/` and only happens once.
+
+### Run (development)
+
+```bash
+# Terminal 1 — server with hot reload (port 3000)
 bun run dev:server
 
-# In another terminal — start the client (port 5173)
+# Terminal 2 — client with HMR (port 5173)
 bun run dev:client
 ```
 
 Open http://localhost:5173
-
-On first run the server downloads the GTFS Schedule (~191 MB) to build the route shape index. This is cached in `.cache/gtfs/` and only happens once.
-
-### Build
-
-```bash
-bun run build
-```
 
 ## Tools
 
