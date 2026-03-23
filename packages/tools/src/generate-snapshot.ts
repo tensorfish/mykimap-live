@@ -200,6 +200,7 @@ function createVehicles(routes: Route[]): SimVehicle[] {
     modeRoutes.get(r.mode)!.push(r);
   }
 
+  // Speeds in m/s per mode
   const modeSpeeds: Record<string, number> = {
     metro: 22, // ~80 km/h
     tram: 8,   // ~30 km/h
@@ -211,7 +212,13 @@ function createVehicles(routes: Route[]): SimVehicle[] {
     const count = Math.min(VEHICLES_PER_MODE, modeRts.length);
     for (let i = 0; i < count; i++) {
       const route = modeRts[i % modeRts.length]!;
-      const startDist = Math.random() * route.totalDist;
+
+      // Distribute vehicles evenly along the route
+      const startFraction = (i / count);
+      const startDist = startFraction * route.totalDist;
+
+      // Alternate direction so half go outbound, half return
+      const direction = i % 2 === 0 ? 1 : -1;
 
       vehicles.push({
         entityId: `sim-${mode}-${i}`,
@@ -220,8 +227,8 @@ function createVehicles(routes: Route[]): SimVehicle[] {
         vehicleId: `${mode.toUpperCase()}-${String(i).padStart(3, "0")}`,
         route,
         shapeDist: startDist,
-        speed: modeSpeeds[mode]! * (0.7 + Math.random() * 0.6), // ±30% variation
-        direction: Math.random() > 0.5 ? 1 : -1,
+        speed: modeSpeeds[mode]! * (0.8 + Math.random() * 0.4), // ±20% variation
+        direction,
       });
     }
   }
@@ -230,15 +237,35 @@ function createVehicles(routes: Route[]): SimVehicle[] {
 }
 
 function stepVehicle(v: SimVehicle, dt: number): void {
-  v.shapeDist += v.speed * dt * v.direction;
+  let remaining = v.speed * dt;
 
-  // Bounce at ends
-  if (v.shapeDist >= v.route.totalDist) {
-    v.shapeDist = v.route.totalDist;
-    v.direction = -1;
-  } else if (v.shapeDist <= 0) {
-    v.shapeDist = 0;
-    v.direction = 1;
+  // Advance along the route, bouncing at both ends.
+  // Carry leftover distance into the reverse direction so the
+  // vehicle progresses continuously instead of sticking at endpoints.
+  while (remaining > 0.1) {
+    if (v.direction > 0) {
+      const toEnd = v.route.totalDist - v.shapeDist;
+      if (remaining >= toEnd) {
+        // Hit the end — bounce
+        v.shapeDist = v.route.totalDist;
+        remaining -= toEnd;
+        v.direction = -1;
+      } else {
+        v.shapeDist += remaining;
+        remaining = 0;
+      }
+    } else {
+      const toStart = v.shapeDist;
+      if (remaining >= toStart) {
+        // Hit the start — bounce
+        v.shapeDist = 0;
+        remaining -= toStart;
+        v.direction = 1;
+      } else {
+        v.shapeDist -= remaining;
+        remaining = 0;
+      }
+    }
   }
 }
 
