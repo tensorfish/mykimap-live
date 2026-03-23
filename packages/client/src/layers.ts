@@ -123,14 +123,17 @@ function sliceShape(shape: CachedShape, fromDist: number, toDist: number): Array
 /** Trail length in meters behind the arrow */
 const TRAIL_LENGTH_M = 800;
 
+/** How long after the last update before the trail starts eating itself */
+const TRAIL_EAT_DELAY_MS = 5000;
+
 interface VehicleAnim {
-  currentDist: number;   // meters along shape — where the arrow is now
-  targetDist: number;    // meters along shape — where the server says it should be
-  tailDist: number;      // meters along shape — where the trail tail is
-  speed: number;         // meters per second
-  direction: number;     // +1 or -1
+  currentDist: number;
+  targetDist: number;
+  tailDist: number;
+  speed: number;
+  direction: number;
   shapeKey: string;
-  lastUpdateAt: number;  // ms — when targetDist was last set
+  lastUpdateAt: number;  // wall clock ms — when targetDist was last set
   lastSnapshotTs: number; // feed timestamp from last update (for speed calc)
 }
 
@@ -158,19 +161,18 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
   for (const v of firstTick.vehicles) firstVehicles.set(v.entityId, v);
 
   for (const [entityId, anim] of anims) {
-    // Starting position: oldest tick in backlog
     const firstV = firstVehicles.get(entityId);
-    if (firstV && firstV.shapeDistTraveled >= 0) {
-      anim.currentDist = firstV.shapeDistTraveled;
+    if (!firstV) continue;
 
-      const dist = Math.abs(anim.targetDist - anim.currentDist);
-      if (dist > 1) {
-        anim.speed = dist / CATCHUP_SECONDS;
-        anim.direction = anim.targetDist >= anim.currentDist ? 1 : -1;
-      }
+    // Snap oldest position to shape (client-side snap for raw data)
+    const startDist = clientSnapToShape(firstV);
+    if (startDist >= 0 && Math.abs(anim.targetDist - startDist) > 1) {
+      anim.currentDist = startDist;
+      anim.speed = Math.abs(anim.targetDist - startDist) / CATCHUP_SECONDS;
+      anim.direction = anim.targetDist >= startDist ? 1 : -1;
     }
 
-    // Set tail behind the starting position for immediate trail
+    // Trail starts behind the arrow
     anim.tailDist = anim.currentDist - (TRAIL_LENGTH_M * anim.direction);
   }
 }
@@ -322,28 +324,28 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
     // Clamp to shape bounds
     anim.currentDist = Math.max(0, Math.min(anim.currentDist, shape.totalDist));
 
-    // Advance the trail tail — follows the arrow at the same speed,
-    // maintaining TRAIL_LENGTH_M behind it. When the arrow stops,
-    // the tail keeps advancing until it catches up = trail "eats itself".
+    // Trail tail follows the arrow, maintaining TRAIL_LENGTH_M behind.
+    // Only "eats itself" if no update for > 5 seconds (genuinely stopped).
     const idealTail = anim.currentDist - (TRAIL_LENGTH_M * anim.direction);
+    const now = performance.now();
+    const idleMs = now - anim.lastUpdateAt;
+    const shouldEat = anim.currentDist === anim.targetDist && idleMs > TRAIL_EAT_DELAY_MS;
+
     if (anim.direction > 0) {
-      // Moving forward: tail should be behind (lower dist)
       if (anim.tailDist < idealTail) {
         anim.tailDist += anim.speed * (dtMs / 1000);
         anim.tailDist = Math.min(anim.tailDist, idealTail);
       }
-      // If arrow stopped but tail hasn't caught up, keep eating
-      if (anim.currentDist === anim.targetDist && anim.tailDist < anim.currentDist) {
+      if (shouldEat && anim.tailDist < anim.currentDist) {
         anim.tailDist += anim.speed * (dtMs / 1000);
         anim.tailDist = Math.min(anim.tailDist, anim.currentDist);
       }
     } else {
-      // Moving backward: tail should be ahead (higher dist)
       if (anim.tailDist > idealTail) {
         anim.tailDist -= anim.speed * (dtMs / 1000);
         anim.tailDist = Math.max(anim.tailDist, idealTail);
       }
-      if (anim.currentDist === anim.targetDist && anim.tailDist > anim.currentDist) {
+      if (shouldEat && anim.tailDist > anim.currentDist) {
         anim.tailDist -= anim.speed * (dtMs / 1000);
         anim.tailDist = Math.max(anim.tailDist, anim.currentDist);
       }
