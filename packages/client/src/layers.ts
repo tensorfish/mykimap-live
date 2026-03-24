@@ -147,6 +147,13 @@ function clientSnapToShape(v: VehiclePosition): number {
     }
   }
 
+  // Reject if the vehicle is too far from the route — it's off-track.
+  // Only applies to buses. Trams, metro trains, and V/Line are on fixed
+  // rail — always snap them regardless of GPS drift.
+  if (bestDist > SNAP_MAX_DISTANCE && v.mode === "bus") {
+    return -1;
+  }
+
   snapCache.set(v.entityId, { lat: v.latitude, lon: v.longitude, dist: bestShapeDist, segIdx: bestIdx });
   return bestShapeDist;
 }
@@ -166,6 +173,7 @@ const ANIM_SPEED_MS = 15;          // m/s default animation speed
 const MIN_MOVE_THRESHOLD_M = 0.5;  // min dist change to register as movement
 const MIN_SPEED_DIST_M = 1;        // min dist change to compute speed
 const SNAP_CLOSE_THRESHOLD = 0.0005; // ~50m in degrees — local snap result is good enough
+const SNAP_MAX_DISTANCE = 0.003;    // ~300m in degrees — beyond this, vehicle is off-route
 const TARGET_REACHED_M = 0.5;      // distance to consider target reached
 
 // ── Congestion heatmap ──
@@ -478,7 +486,15 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
     // arrives behind the arrow).
     if (anim.targets.length > 0) {
       const target = anim.targets[0]!;
-      anim.direction = target >= anim.currentDist ? 1 : -1;
+      const newDirection = target >= anim.currentDist ? 1 : -1;
+
+      // When direction flips, reset tail to current position.
+      // Otherwise the trail ends up on the wrong side (appears "in the future").
+      if (newDirection !== anim.direction) {
+        anim.tailDist = anim.currentDist;
+        anim.direction = newDirection;
+      }
+
       const advance = anim.speed * (dtMs / 1000);
 
       if (anim.direction > 0) {
