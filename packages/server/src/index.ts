@@ -218,7 +218,7 @@ function broadcastCycle(): void {
 
 /** Simple sliding-window rate limiter per IP */
 const RATE_WINDOW_MS = 60_000; // 1 minute
-const RATE_MAX_REQUESTS = 120;  // per window
+const RATE_MAX_REQUESTS = 1200;  // per window
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 
 function checkRateLimit(ip: string): boolean {
