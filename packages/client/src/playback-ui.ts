@@ -86,17 +86,22 @@ export function initPlaybackUI(): PlaybackUIControls {
 
   playBtn.addEventListener("click", async () => {
     const state = getPlaybackState();
+    if (!state.active) return; // not ready — enterPlayback still loading meta/DuckDB
     if (state.playing) {
       pause();
       sounds.pause();
     } else {
       // If we haven't loaded any data yet, load the initial chunk first
       if (state.bufferedRanges.length === 0) {
-        await loadInitialChunk(state.currentTimestamp);
+        const ok = await loadInitialChunk(state.currentTimestamp);
+        if (!ok || !getPlaybackState().active) return; // load failed or playback was stopped
       }
+      // Re-read state after possible async gap — playback may have been stopped
+      const current = getPlaybackState();
+      if (!current.active) return;
       // If playback reached the end, restart from the beginning
-      if (state.currentTimestamp >= state.maxTimestamp) {
-        seekTo(state.minTimestamp);
+      if (current.currentTimestamp >= current.maxTimestamp) {
+        seekTo(current.minTimestamp);
       }
       play();
       sounds.play();
@@ -104,14 +109,16 @@ export function initPlaybackUI(): PlaybackUIControls {
   });
 
   backBtn.addEventListener("click", () => {
-    sounds.select();
     const state = getPlaybackState();
+    if (!state.active) return;
+    sounds.select();
     seekTo(state.currentTimestamp - 15);
   });
 
   fwdBtn.addEventListener("click", () => {
-    sounds.select();
     const state = getPlaybackState();
+    if (!state.active) return;
+    sounds.select();
     seekTo(state.currentTimestamp + 15);
   });
 
@@ -120,6 +127,7 @@ export function initPlaybackUI(): PlaybackUIControls {
   slider.addEventListener("touchstart", () => { scrubbing = true; });
   slider.addEventListener("input", () => {
     const state = getPlaybackState();
+    if (!state.active) return;
     const t = parseFloat(slider.value) / 100;
     const ts = state.minTimestamp + t * (state.maxTimestamp - state.minTimestamp);
     seekTo(ts);
