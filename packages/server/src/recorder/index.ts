@@ -158,8 +158,9 @@ export function listRecordingDates(): string[] {
       dates.add(f.replace(".parquet", ""));
     } else if (f.endsWith(".duckdb") && !f.endsWith(".duckdb.wal")) {
       const dateStr = f.replace(".duckdb", "");
-      // Past dates can be exported on demand; today needs the parquet to exist
-      if (dateStr !== today) dates.add(dateStr);
+      // Include all dates — today is served from the live DB,
+      // past dates are exported on demand
+      dates.add(dateStr);
     }
   }
   return [...dates].sort();

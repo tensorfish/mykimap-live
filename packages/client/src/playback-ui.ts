@@ -38,30 +38,37 @@ export function initPlaybackUI(): PlaybackUIControls {
   // Available dates cache
   let availableDates: Set<string> = new Set();
 
+  // Guard against concurrent enterPlayback calls
+  let enterGeneration = 0;
+
   // History button — opens playback mode
   historyBtn.addEventListener("click", async () => {
     sounds.select();
     historyBtn.textContent = "Loading...";
     historyBtn.setAttribute("disabled", "");
 
-    const dates = await listAvailableDates();
+    try {
+      const dates = await listAvailableDates();
 
-    historyBtn.textContent = "History";
-    historyBtn.removeAttribute("disabled");
+      if (dates.length === 0) {
+        historyBtn.textContent = "History";
+        historyBtn.removeAttribute("disabled");
+        alert("No recordings available yet. The server exports snapshots every 5 minutes — please try again shortly.");
+        return;
+      }
 
-    if (dates.length === 0) {
-      alert("No recordings available yet. The server exports snapshots every 5 minutes — please try again shortly.");
-      return;
+      availableDates = new Set(dates);
+
+      dateSelect.min = dates[0]!;
+      dateSelect.max = dates[dates.length - 1]!;
+      dateSelect.value = dates[dates.length - 1]!;
+      dateSelect.title = `${dates.length} recording${dates.length === 1 ? "" : "s"}: ${dates[0]} to ${dates[dates.length - 1]}`;
+
+      await enterPlayback(dates[dates.length - 1]!);
+    } finally {
+      historyBtn.textContent = "History";
+      historyBtn.removeAttribute("disabled");
     }
-
-    availableDates = new Set(dates);
-
-    dateSelect.min = dates[0]!;
-    dateSelect.max = dates[dates.length - 1]!;
-    dateSelect.value = dates[dates.length - 1]!;
-    dateSelect.title = `${dates.length} recording${dates.length === 1 ? "" : "s"}: ${dates[0]} to ${dates[dates.length - 1]}`;
-
-    await enterPlayback(dates[dates.length - 1]!);
   });
 
   closeBtn.addEventListener("click", () => { sounds.select(); exitPlayback(); });
@@ -228,6 +235,9 @@ export function initPlaybackUI(): PlaybackUIControls {
   }
 
   async function enterPlayback(date: string, startTimestamp?: number): Promise<void> {
+    // Increment generation — any previous enterPlayback becomes stale
+    const gen = ++enterGeneration;
+
     // Stop any existing playback first
     stopPlayback();
     disconnect();
@@ -238,6 +248,10 @@ export function initPlaybackUI(): PlaybackUIControls {
 
     // Step 1: Fetch metadata — slider is interactive immediately
     const meta = await loadMeta(date);
+
+    // Stale check — another enterPlayback or exitPlayback happened while we were loading
+    if (gen !== enterGeneration) return;
+
     if (!meta) {
       exitPlayback();
       return;
@@ -253,10 +267,24 @@ export function initPlaybackUI(): PlaybackUIControls {
     const ts = startTimestamp
       ? Math.max(meta.minTimestamp, Math.min(startTimestamp, meta.maxTimestamp))
       : meta.minTimestamp;
-    await loadInitialChunk(ts);
+    const ok = await loadInitialChunk(ts);
+
+    // Stale check again after async gap
+    if (gen !== enterGeneration) return;
+
+    if (!ok) {
+      // Chunk download failed — retry once before giving up
+      const retry = await loadInitialChunk(ts);
+      if (gen !== enterGeneration) return;
+      if (!retry) {
+        exitPlayback();
+        return;
+      }
+    }
   }
 
   function exitPlayback(): void {
+    enterGeneration++; // invalidate any in-flight enterPlayback
     stopPlayback();
     bufferingOverlay.classList.remove("visible");
     document.title = "Myki Map - Live Melbourne Transport";

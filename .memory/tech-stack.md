@@ -129,3 +129,9 @@ These shape the server's interpolation design:
 - **GTFS Schedule** (~191 MB static ZIP) provides route names, colors, stop names, and 3.7M shape points for route geometry.
 
 See [gtfs-vic.md](gtfs-vic.md) for the full field-by-field breakdown.
+
+## Future Improvements
+
+### Stop-to-stop speed via GTFS Schedule + Trip Updates
+
+Speed is currently averaged from position poll deltas (~60s window). A more accurate approach: load `stop_times.txt` (has `shape_dist_traveled` per stop per trip) and consume trip updates (already polled, currently discarded) to compute precise stop-to-stop speed using real predicted arrival/departure times. See [gtfs-vic.md → Future: Stop-to-Stop Speed](gtfs-vic.md#future-stop-to-stop-speed-from-schedule--trip-updates) for full design.

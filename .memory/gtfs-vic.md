@@ -503,3 +503,42 @@ Unmatched vehicles fall back to straight-line interpolation. This is acceptable 
 ### Stale vehicle handling
 
 Vehicles with per-entity timestamps >120s old are likely parked. Do not interpolate — hold them at their last known position.
+
+---
+
+## Future: Stop-to-Stop Speed from Schedule + Trip Updates
+
+### Problem
+
+Speed is currently inferred from consecutive position polls (~15s apart, feed cached ~30s). This is noisy, delayed, and affected by irregular vehicle reporting rates.
+
+### Opportunity
+
+The GTFS Schedule **stop_times.txt** contains `shape_dist_traveled` at every stop for every trip, plus scheduled `arrival_time`/`departure_time`. Combined with **trip updates** (which we already poll but currently discard), we can compute precise stop-to-stop speed.
+
+### Data available
+
+- **stop_times.txt**: `trip_id, arrival_time, departure_time, stop_id, stop_sequence, shape_dist_traveled` — gives the exact distance along the shape at each stop, plus scheduled times.
+- **Trip updates (realtime)**: predicted `arrival.time` / `departure.time` at upcoming stops per trip — gives actual (not scheduled) timing.
+- **Vehicle positions**: `trip_id` + `shapeDistTraveled` — tells us where the vehicle currently is along the shape.
+
+### How it would work
+
+1. **Load stop_times.txt** at boot — build a lookup: `tripId → [{stopSequence, shapeDist, scheduledArr, scheduledDep}]`.
+2. **Consume trip updates** (currently decoded but discarded) — get predicted arrival/departure times at upcoming stops per trip.
+3. **For each vehicle**: use its `tripId` + current `shapeDistTraveled` to find which stop-to-stop segment it's on (between which two stops).
+4. **Compute segment speed**: distance between the two stops (from `shape_dist_traveled` in stop_times) ÷ time between departure at previous stop and predicted arrival at next stop (from trip updates).
+5. **Dwell detection**: if a vehicle's `shapeDistTraveled` is near a stop's `shape_dist_traveled` and the trip update shows it hasn't departed yet, mark it as dwelling (speed = 0).
+
+### Benefits
+
+- **Accurate**: based on actual stop events, not noisy GPS deltas.
+- **Stable**: speed doesn't fluctuate between polls.
+- **Dwell-aware**: knows when a vehicle is stopped at a station vs moving.
+- **Already have the data**: trip updates are polled every 15s but discarded. stop_times.txt is in the same GTFS ZIP we already download.
+
+### Prerequisites
+
+- Parse and index `stop_times.txt` (adds memory — ~3.4M rows across all modes, but only need the `tripId → stops` lookup).
+- Wire up trip update decoding (already exists in `decoder.ts` as `decodeTripUpdates`) to the main poll pipeline.
+- Join trip updates to vehicles by `trip_id`.

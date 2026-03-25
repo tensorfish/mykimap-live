@@ -278,7 +278,9 @@ function buildHeatmapForTime(ts: number): void {
  */
 export async function loadMeta(date: string): Promise<SnapshotMeta | null> {
   seekGeneration++;
-  cancelFetches();
+  // Reset chunks first (also aborts any existing controller and sets it to null),
+  // then get a fresh abort signal. Don't call cancelFetches() before resetChunks()
+  // — that creates a controller that resetChunks immediately aborts.
   resetChunks();
   const signal = getAbortSignal();
 
