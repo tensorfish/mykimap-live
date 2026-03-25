@@ -69,7 +69,7 @@ function renderPanel(v: VehiclePosition, alerts: ServiceAlert[]): string {
   const speedDisplay = v.speed >= 0.5
     ? `<span class="panel-speed-value">${speedKmh}</span> <span style="color:var(--text-secondary)">km/h</span>`
     : `<span class="panel-speed-value" style="color:var(--text-tertiary)">0</span> <span style="color:var(--text-secondary)">Stationary</span>`;
-  html += `<div class="panel-field"><div class="panel-field-label">Speed</div><div class="panel-field-value">${speedDisplay}</div></div>`;
+  html += `<div class="panel-field"><div class="panel-field-label">Avg Speed</div><div class="panel-field-value">${speedDisplay}</div></div>`;
 
   // Direction
   if (v.bearing > 0) {

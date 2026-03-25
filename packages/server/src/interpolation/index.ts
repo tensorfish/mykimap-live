@@ -95,6 +95,34 @@ export function processSnapshot(
   return vehicles;
 }
 
+// ── Average speed over recent snapshots ──
+// Looks back up to AVG_SPEED_LOOKBACK snapshots from snapBIdx for a given vehicle.
+// Uses total distance / total time for a stable average.
+const AVG_SPEED_LOOKBACK = 4; // ~60s at 15s poll intervals
+
+function avgSpeedOverHistory(entityId: string, currentDist: number, snapBIdx: number): number {
+  // Walk backwards to find the oldest snapshot that has this vehicle
+  let oldest: { dist: number; timestamp: number } | null = null;
+  let newest: { dist: number; timestamp: number } | null = null;
+
+  const end = snapBIdx;
+  const start = Math.max(0, end - AVG_SPEED_LOOKBACK);
+
+  for (let i = end; i >= start; i--) {
+    const snap = snapshotBuffer[i];
+    if (!snap) continue;
+    const v = snap.vehicles.get(entityId);
+    if (!v || v.shapeDistTraveled < 0) continue;
+    if (!newest) newest = { dist: v.shapeDistTraveled, timestamp: v.timestamp };
+    oldest = { dist: v.shapeDistTraveled, timestamp: v.timestamp };
+  }
+
+  if (!oldest || !newest || oldest === newest) return 0;
+  const dt = newest.timestamp - oldest.timestamp;
+  if (dt <= 0) return 0;
+  return Math.abs(newest.dist - oldest.dist) / dt;
+}
+
 // ── Interpolate for broadcast (30s delayed playback) ──
 
 export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
@@ -107,10 +135,12 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
   let snapA: Snapshot | null = null;
   let snapB: Snapshot | null = null;
 
+  let snapBIdx = -1;
   for (let i = 0; i < snapshotBuffer.length - 1; i++) {
     if (snapshotBuffer[i]!.timestamp <= playbackTime && snapshotBuffer[i + 1]!.timestamp > playbackTime) {
       snapA = snapshotBuffer[i]!;
       snapB = snapshotBuffer[i + 1]!;
+      snapBIdx = i + 1;
       break;
     }
   }
@@ -140,10 +170,8 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
       const pos = sampleShape(shape, clampedDist);
 
       if (pos) {
-        // Use per-vehicle timestamps for speed (more accurate than header span
-        // when the feed caches data or vehicles report at different rates)
-        const vSpan = vB.timestamp - vA.timestamp;
-        const speed = vSpan > 0 ? Math.abs(vB.shapeDistTraveled - vA.shapeDistTraveled) / vSpan : 0;
+        // Average speed over recent snapshots (smoother than instant speed)
+        const speed = avgSpeedOverHistory(entityId, vB.shapeDistTraveled, snapBIdx);
         result.push({
           ...vB,
           latitude: pos.lat,
