@@ -140,7 +140,10 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
       const pos = sampleShape(shape, clampedDist);
 
       if (pos) {
-        const speed = span > 0 ? Math.abs(vB.shapeDistTraveled - vA.shapeDistTraveled) / span : 0;
+        // Use per-vehicle timestamps for speed (more accurate than header span
+        // when the feed caches data or vehicles report at different rates)
+        const vSpan = vB.timestamp - vA.timestamp;
+        const speed = vSpan > 0 ? Math.abs(vB.shapeDistTraveled - vA.shapeDistTraveled) / vSpan : 0;
         result.push({
           ...vB,
           latitude: pos.lat,
