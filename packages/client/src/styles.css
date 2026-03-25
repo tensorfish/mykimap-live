@@ -175,16 +175,25 @@ html, body {
 #sound-btn.on { color: var(--text-primary); }
 #sound-btn:focus-visible { outline: 2px solid rgba(255,255,255,0.4); outline-offset: 1px; }
 #x-link {
-  color: var(--text-tertiary);
-  font-size: var(--text-base);
-  font-weight: 700;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
   text-decoration: none;
-  padding: 2px 6px;
+  padding: 4px 10px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   transition: all var(--ease);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  letter-spacing: 0.3px;
 }
-#x-link:hover { color: var(--text-primary); border-color: var(--border-hover); }
+#x-link span {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+#x-link:hover { color: var(--text-primary); background: rgba(255,255,255,0.08); border-color: var(--border-hover); }
+#x-link:hover span { color: #fff; }
 #x-link:focus-visible { outline: 2px solid rgba(255,255,255,0.4); outline-offset: 1px; }
 
 /* ── Filter bar ── */
