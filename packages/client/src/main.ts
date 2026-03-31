@@ -45,13 +45,26 @@ if (!MAPBOX_TOKEN) {
         const hour = parseInt(replayMatch[2], 10);
         const minute = parseInt(replayMatch[3], 10);
         const second = replayMatch[4] ? parseInt(replayMatch[4], 10) : 0;
-        const utcGuess = new Date(`${date}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}Z`);
-        const melbHour = parseInt(utcGuess.toLocaleString("en-AU", { hour: "numeric", hour12: false, timeZone: "Australia/Melbourne" }), 10);
-        const offsetH = melbHour - utcGuess.getUTCHours();
-        utcGuess.setHours(utcGuess.getUTCHours() - offsetH + hour);
-        utcGuess.setMinutes(minute);
-        utcGuess.setSeconds(second);
-        startTs = Math.floor(utcGuess.getTime() / 1000);
+
+        // 1. Interpret the time as if UTC
+        const asUTC = Date.UTC(
+          parseInt(date.slice(0, 4), 10),
+          parseInt(date.slice(5, 7), 10) - 1,
+          parseInt(date.slice(8, 10), 10),
+          hour, minute, second
+        );
+
+        // 2. Find Melbourne's UTC offset (use noon as probe to avoid DST
+        //    boundary edge cases — transitions happen at 2–3 AM local)
+        const probe = new Date(`${date}T12:00:00Z`);
+        const melbNoonHour = parseInt(
+          probe.toLocaleString("en-AU", { hour: "numeric", hour12: false, timeZone: "Australia/Melbourne" }),
+          10
+        );
+        const offsetS = (melbNoonHour - 12) * 3600;
+
+        // 3. POSIX = "time as-if-UTC" minus the Melbourne offset
+        startTs = Math.floor(asUTC / 1000) - offsetS;
       }
       playbackUI.enterPlayback(date, startTs).then(async () => {
         const state = getPlaybackState();
