@@ -6,7 +6,7 @@ import { initFilters } from "./filters.js";
 import { initPlaybackUI, type PlaybackUIControls } from "./playback-ui.js";
 import { connect } from "./ws.js";
 import { transition, selectVehicle, getSelectedEntityId } from "./store.js";
-import { getPlaybackState, play, pause, seekTo } from "./playback.js";
+import { getPlaybackState, loadInitialChunk, play, pause, seekTo } from "./playback.js";
 import { sounds } from "./audio.js";
 
 // Init error modal first so it catches everything
@@ -53,7 +53,12 @@ if (!MAPBOX_TOKEN) {
         utcGuess.setSeconds(second);
         startTs = Math.floor(utcGuess.getTime() / 1000);
       }
-      playbackUI.enterPlayback(date, startTs).then(() => {
+      playbackUI.enterPlayback(date, startTs).then(async () => {
+        const state = getPlaybackState();
+        if (!state.active) return;
+        // Load the initial chunk, then auto-play (replay URL intent)
+        const ok = await loadInitialChunk(state.currentTimestamp);
+        if (!ok || !getPlaybackState().active) return;
         play();
       });
     } else {

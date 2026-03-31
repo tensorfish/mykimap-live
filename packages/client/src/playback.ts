@@ -355,6 +355,15 @@ export function seekTo(timestamp: number): void {
     Math.min(timestamp, playback.maxTimestamp)
   );
   setCurrentPlaybackTs(playback.currentTimestamp);
+
+  // If no data has been loaded yet (play hasn't been pressed), just update
+  // the position marker without attempting any downloads.
+  const ranges = getBufferedRanges();
+  if (ranges.length === 0) {
+    notify();
+    return;
+  }
+
   lastFedIdx = -1;
   clearAnimations();
 

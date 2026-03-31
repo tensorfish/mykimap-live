@@ -263,23 +263,11 @@ export function initPlaybackUI(): PlaybackUIControls {
     // Sync speed from the UI selector
     setSpeed(parseInt(speedSelect.value, 10));
 
-    // Step 2: Load the chunk containing the start time
-    const ts = startTimestamp
-      ? Math.max(meta.minTimestamp, Math.min(startTimestamp, meta.maxTimestamp))
-      : meta.minTimestamp;
-    const ok = await loadInitialChunk(ts);
-
-    // Stale check again after async gap
-    if (gen !== enterGeneration) return;
-
-    if (!ok) {
-      // Chunk download failed — retry once before giving up
-      const retry = await loadInitialChunk(ts);
-      if (gen !== enterGeneration) return;
-      if (!retry) {
-        exitPlayback();
-        return;
-      }
+    // If a start timestamp was provided (e.g., replay URL), set the position
+    // but don't download any data yet — play button will trigger that.
+    if (startTimestamp) {
+      const ts = Math.max(meta.minTimestamp, Math.min(startTimestamp, meta.maxTimestamp));
+      seekTo(ts);
     }
   }
 
