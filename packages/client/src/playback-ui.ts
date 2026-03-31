@@ -242,11 +242,12 @@ export function initPlaybackUI(): PlaybackUIControls {
     stopPlayback();
     disconnect();
 
+    // Hide status bar but don't show playback UI yet — wait for meta to load.
+    // This prevents clicks on play before metadata is ready (active=false).
     statusEl.style.display = "none";
-    playbackEl.style.display = "flex";
     document.getElementById("vehicle-count")?.classList.add("hidden");
 
-    // Step 1: Fetch metadata — slider is interactive immediately
+    // Fetch metadata for the selected date
     const meta = await loadMeta(date);
 
     // Stale check — another enterPlayback or exitPlayback happened while we were loading
@@ -256,6 +257,9 @@ export function initPlaybackUI(): PlaybackUIControls {
       exitPlayback();
       return;
     }
+
+    // Meta is loaded — now show the playback UI (play button is safe to click)
+    playbackEl.style.display = "flex";
 
     // Update date picker to reflect the loaded date
     dateSelect.value = date;
