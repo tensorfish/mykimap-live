@@ -92,8 +92,9 @@ export function initPlaybackUI(): PlaybackUIControls {
   });
 
   playBtn.addEventListener("click", async () => {
+    if (playBtn.hasAttribute("disabled")) return; // meta still loading
     const state = getPlaybackState();
-    if (!state.active) return; // not ready — enterPlayback still loading meta/DuckDB
+    if (!state.active) return;
     if (state.playing) {
       pause();
       sounds.pause();
@@ -242,10 +243,13 @@ export function initPlaybackUI(): PlaybackUIControls {
     stopPlayback();
     disconnect();
 
-    // Hide status bar but don't show playback UI yet — wait for meta to load.
-    // This prevents clicks on play before metadata is ready (active=false).
+    // Show playback UI immediately with loading feedback
     statusEl.style.display = "none";
+    playbackEl.style.display = "flex";
     document.getElementById("vehicle-count")?.classList.add("hidden");
+    playBtn.setAttribute("disabled", "");
+    bufferingOverlay.classList.add("visible");
+    bufferingText.textContent = "Loading metadata...";
 
     // Fetch metadata for the selected date
     const meta = await loadMeta(date);
@@ -253,13 +257,14 @@ export function initPlaybackUI(): PlaybackUIControls {
     // Stale check — another enterPlayback or exitPlayback happened while we were loading
     if (gen !== enterGeneration) return;
 
+    // Clear loading feedback
+    bufferingOverlay.classList.remove("visible");
+    playBtn.removeAttribute("disabled");
+
     if (!meta) {
       exitPlayback();
       return;
     }
-
-    // Meta is loaded — now show the playback UI (play button is safe to click)
-    playbackEl.style.display = "flex";
 
     // Update date picker to reflect the loaded date
     dateSelect.value = date;
