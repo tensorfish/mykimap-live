@@ -43,19 +43,19 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    STATE["Current\nworld state"] --> CHECK{"Vehicle\nstale?"}
-    CHECK -- Yes --> HOLD["Hold at last\nknown position"]
-    CHECK -- No --> PROGRESS{"t = elapsed /\ntravel time"}
-    PROGRESS -- "t ≤ 1" --> LERP["Lerp origin → target\nalong shape"]
-    PROGRESS -- "t > 1" --> OVERSHOOT["Project past target\nspeed × overshoot\nalong shape"]
-    LERP --> FALLBACK
-    OVERSHOOT --> FALLBACK
+    BUFFER["30s delayed\nsnapshot buffer"] --> PICK["Pick snapA/snapB\nstraddling delayed time"]
+    PICK --> STALE{"Vehicle\nstale?"}
+    STALE -- Yes --> HOLD["Hold at last\nknown position"]
+    STALE -- No --> SHAPE{"Has shape +\nshape distances?"}
+    SHAPE -- Yes --> LERP["Interpolate along\nroute shape"]
+    SHAPE -- No --> STRAIGHT["Straight-line\ninterpolation"]
     HOLD --> JSON["Serialize\nto JSON"]
-    FALLBACK{"Has shape?"} -- No --> STRAIGHT["Straight-line\nlerp/projection"]
-    FALLBACK -- Yes --> JSON
+    LERP --> JSON
     STRAIGHT --> JSON
     JSON --> SEND["Send to all\nWebSocket clients"]
 ```
+
+The delayed playback cursor is sampled with `Date.now()` millisecond precision, then interpolated between the two surrounding poll snapshots. That avoids 1Hz quantization, so successive live broadcasts keep moving smoothly instead of briefly pausing on rounded whole-second positions.
 
 ## Server state machine
 
@@ -147,6 +147,8 @@ flowchart LR
 One render loop. One speed multiplier. Zero duplicate animation code.
 
 Live animation rule: each authoritative `WorldState` appends at most one constant-velocity motion segment per vehicle. Segment duration comes from `WorldState.tickTimeMs` on the shared world clock, not the semantic `VehiclePosition.speed` field. Backlog bootstrap replays the same segment model, so startup and steady-state live mode use the same motion contract.
+
+Playback speed display rule: when historical snapshots don't carry a usable semantic speed, the client derives `VehiclePosition.speed` from adjacent historical datapoints around the current playback snapshot. That powers the panel's “Avg Speed” readout without affecting the animation clock.
 
 ## Key timing constants
 

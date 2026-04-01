@@ -128,16 +128,21 @@ function avgSpeedOverHistory(entityId: string, currentDist: number, snapBIdx: nu
 export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
   if (snapshotBuffer.length === 0) return vehicles;
 
-  const nowS = Math.floor(Date.now() / 1000);
-  const playbackTime = nowS - PLAYBACK_DELAY_S;
+  // Use a millisecond playback cursor so consecutive ~1s broadcasts do not
+  // quantize onto whole-second positions. That quantization produced visible
+  // start/stop motion in live mode whenever two broadcasts landed in the same
+  // rounded second.
+  const playbackTimeMs = Date.now() - (PLAYBACK_DELAY_S * 1000);
 
-  // Find two snapshots straddling playbackTime
+  // Find two snapshots straddling playbackTimeMs
   let snapA: Snapshot | null = null;
   let snapB: Snapshot | null = null;
 
   let snapBIdx = -1;
   for (let i = 0; i < snapshotBuffer.length - 1; i++) {
-    if (snapshotBuffer[i]!.timestamp <= playbackTime && snapshotBuffer[i + 1]!.timestamp > playbackTime) {
+    const snapATimeMs = snapshotBuffer[i]!.timestamp * 1000;
+    const snapBTimeMs = snapshotBuffer[i + 1]!.timestamp * 1000;
+    if (snapATimeMs <= playbackTimeMs && snapBTimeMs > playbackTimeMs) {
       snapA = snapshotBuffer[i]!;
       snapB = snapshotBuffer[i + 1]!;
       snapBIdx = i + 1;
@@ -153,8 +158,10 @@ export function interpolate(vehicles: VehiclePosition[]): VehiclePosition[] {
     );
   }
 
-  const span = snapB.timestamp - snapA.timestamp;
-  const t = span > 0 ? (playbackTime - snapA.timestamp) / span : 0;
+  const snapATimeMs = snapA.timestamp * 1000;
+  const snapBTimeMs = snapB.timestamp * 1000;
+  const spanMs = snapBTimeMs - snapATimeMs;
+  const t = spanMs > 0 ? (playbackTimeMs - snapATimeMs) / spanMs : 0;
 
   const result: VehiclePosition[] = [];
 

@@ -129,6 +129,45 @@ export function advancePlayback(dtMs: number): void {
 
 let lastNotifyTime = 0;
 
+function haversineDistanceMeters(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const R = 6371000;
+  const toRad = (deg: number) => deg * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function derivePlaybackSpeed(
+  prev: VehiclePosition | undefined,
+  current: VehiclePosition,
+  next: VehiclePosition | undefined,
+  currentTs: number,
+): number {
+  let totalDist = 0;
+  let totalDt = 0;
+
+  if (prev && currentTs > prev.timestamp) {
+    totalDist += haversineDistanceMeters(prev.latitude, prev.longitude, current.latitude, current.longitude);
+    totalDt += currentTs - prev.timestamp;
+  }
+
+  if (next && next.timestamp > currentTs) {
+    totalDist += haversineDistanceMeters(current.latitude, current.longitude, next.latitude, next.longitude);
+    totalDt += next.timestamp - currentTs;
+  }
+
+  if (totalDt <= 0) return current.speed;
+  return totalDist / totalDt;
+}
+
 /**
  * When playback outruns the buffer, load the needed chunk and resume.
  * `gen` is the seek generation at call time — if it changed by the time
@@ -204,21 +243,35 @@ function feedCurrentSnapshot(): void {
   const snap = allSnaps[idx]!;
   const ts = playback.currentTimestamp;
   const timelines = getVehicleTimelines();
+  const prevVehicles = idx > 0 ? new Map(allSnaps[idx - 1]!.vehicles.map((v) => [v.entityId, v])) : null;
+  const nextVehicles = idx < allSnaps.length - 1 ? new Map(allSnaps[idx + 1]!.vehicles.map((v) => [v.entityId, v])) : null;
 
   const vehicles: VehiclePosition[] = snap.vehicles.map((v) => {
     const tl = timelines.get(v.entityId);
-    if (!tl || tl.waypoints.length === 0) return v;
 
-    // Advance timeline index past current playback time
-    while (tl.nextIdx < tl.waypoints.length - 1 && tl.waypoints[tl.nextIdx]!.ts <= ts) {
-      tl.nextIdx++;
+    let latitude = v.latitude;
+    let longitude = v.longitude;
+    if (tl && tl.waypoints.length > 0) {
+      // Advance timeline index past current playback time
+      while (tl.nextIdx < tl.waypoints.length - 1 && tl.waypoints[tl.nextIdx]!.ts <= ts) {
+        tl.nextIdx++;
+      }
+
+      const wp = tl.waypoints[Math.min(tl.nextIdx, tl.waypoints.length - 1)]!;
+      latitude = wp.lat;
+      longitude = wp.lon;
     }
 
-    const wp = tl.waypoints[Math.min(tl.nextIdx, tl.waypoints.length - 1)]!;
     return {
       ...v,
-      latitude: wp.lat,
-      longitude: wp.lon,
+      latitude,
+      longitude,
+      speed: derivePlaybackSpeed(
+        prevVehicles?.get(v.entityId),
+        v,
+        nextVehicles?.get(v.entityId),
+        snap.timestamp,
+      ),
     };
   });
 

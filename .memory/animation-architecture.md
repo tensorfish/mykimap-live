@@ -30,7 +30,7 @@ Vehicles don't lerp between raw lat/lon positions (that cuts through buildings).
    - `tailDist` — where the trail tail is
    - `segments[]` — queued motion segments, each `{ startDist, endDist, durationMs, elapsedMs }`
    - `direction` — +1 or -1 along shape
-   - `displaySpeed` — semantic speed shown in the UI. Used for labels/heatmap, **not** as the live animation clock.
+   - `displaySpeed` — semantic speed shown in the UI. Used for labels/heatmap, **not** as the live animation clock. In playback, this is derived from neighboring historical snapshot datapoints when recorded snapshot speed is missing or zero.
 
    Every `WorldState` also carries `tickTimeMs` — the authoritative world time for that tick. Live mode uses server emit time. Playback uses simulated world time (`snapshot.timestamp * 1000`).
 
@@ -102,7 +102,7 @@ No second rAF loop for playback. `play()` and `pause()` just set boolean flags.
 ```
 GTFS-RT feed (every ~30s)
   → server processSnapshot (snap to shapes, calculate speed)
-  → server interpolate (30s delayed playback, advance along shape)
+  → server interpolate (30s delayed playback, advance along shape with a millisecond playback cursor)
   → broadcast via WebSocket (every 1s)
   → client applyTick → store
   → feedWorldState: append constant-velocity motion segments from `shapeDistTraveled` + `tickTimeMs`
@@ -120,6 +120,7 @@ User picks date
   → advancePlayback: advance timestamp, feed snapshot when crossed
   → applyTick → store
   → feedWorldState: clientSnapToShape (raw GPS → shapeDist), append motion segments
+  → derive semantic speed from neighboring historical snapshot datapoints for UI/panel display
   → computeFrame: advance arrow along shape at 60fps × speed multiplier
   → render: arrows + trails + route shapes
 
@@ -163,7 +164,7 @@ When the page loads:
 
 ## Why This Works
 
-- **No prediction** — server uses 30s delayed playback, interpolating between two known positions
+- **No prediction** — server uses 30s delayed playback, interpolating between two known positions with a millisecond-precision delayed cursor
 - **No dual animation** — one render loop, one animation system, one speed control
 - **Route-following** — all positions sampled from GTFS shape polylines
 - **Trail from shape** — always on the road, never cuts through buildings

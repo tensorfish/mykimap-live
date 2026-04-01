@@ -43,7 +43,7 @@ Bun workspaces manage all three from the root.
 1. **Poll** — Every 15 seconds, fetch all 10 feeds in parallel. Auth via `KeyID` header. ~558 KB per poll. Feed caches ~30s server-side.
 2. **Record** — Raw feed data saved to DuckDB (`.data/snapshots/YYYY-MM-DD.duckdb` in Melbourne time) before processing.
 3. **Snapshot** — Decode protobuf. Snap each vehicle onto its GTFS route shape polyline (dual-direction per route). Calculate speed from shape distance delta.
-4. **Interpolate** — 30s delayed playback: interpolate between two known snapshots along the shape. Every broadcast position is between two ground-truth points — no prediction, no overshoot.
+4. **Interpolate** — 30s delayed playback: interpolate between two known snapshots along the shape using a millisecond-precision delayed playback cursor. Every broadcast position is between two ground-truth points — no prediction, no overshoot, and no 1Hz quantization jitter.
 5. **Broadcast** — Every ~1s, push interpolated state to all connected clients via WebSocket.
 
 ### Multi-client consistency

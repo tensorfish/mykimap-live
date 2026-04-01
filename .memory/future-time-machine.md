@@ -89,11 +89,12 @@ The client streams 30-minute Parquet chunks on demand using [DuckDB-WASM](https:
 1. User picks a date → client fetches `GET /data/snapshots/2026-03-22/meta` (~1 KB) → slider renders instantly
 2. User presses play → client fetches first 30-minute chunk (`?from=&to=`) → ~4–13 MB
 3. Chunk manager (`playback-chunks.ts`) registers chunk in DuckDB-WASM, decodes to snapshots + timelines
-4. Vehicles appear and start moving within seconds
-5. While playing, prefetch next chunk in background
-6. If playback outruns buffer → inline "Buffering..." on playback bar (not full-screen modal)
-7. Buffer bar on slider shows loaded ranges (like YouTube's gray bar)
-8. Old chunks evicted (LRU, max 4 loaded) to bound memory at ~20–50 MB
+4. Playback derives semantic vehicle speed from adjacent historical snapshot datapoints, because recorded snapshot speed may be missing or zero
+5. Vehicles appear and start moving within seconds
+6. While playing, prefetch next chunk in background
+7. If playback outruns buffer → inline "Buffering..." on playback bar (not full-screen modal)
+8. Buffer bar on slider shows loaded ranges (like YouTube's gray bar)
+9. Old chunks evicted (LRU, max 4 loaded) to bound memory at ~20–50 MB
 
 **Key constraint:** `applyTick()` and the rendering pipeline must not care whether the data came from a live WebSocket tick or a historical DuckDB query. Same `WorldState` shape, same code path. `WorldState` now includes `tickTimeMs` so both live and playback can derive constant-velocity motion segments from an authoritative clock.
 
