@@ -224,6 +224,7 @@ function feedCurrentSnapshot(): void {
 
   applyTick({
     timestamp: snap.timestamp,
+    tickTimeMs: snap.timestamp * 1000,
     vehicles,
     alerts: [],
     congestion: [],

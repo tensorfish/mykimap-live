@@ -116,6 +116,8 @@ export interface SegmentSpeed {
 
 export interface WorldState {
   timestamp: number;
+  /** Authoritative tick/world time in milliseconds. Live mode uses server emit time; playback uses simulated world time. */
+  tickTimeMs: number;
   vehicles: VehiclePosition[];
   alerts: ServiceAlert[];
   congestion: SegmentSpeed[];

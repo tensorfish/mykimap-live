@@ -36,7 +36,7 @@ Bun workspaces manage all three from the root.
 | Route shapes | Custom `shapes/` module | Downloads GTFS Schedule ZIP (~191 MB) on first boot, caches in `.cache/gtfs/`, extracts `shapes.txt` + `trips.txt` to build an in-memory `trip_id → shape polyline` index. Non-fatal if download fails — falls back to straight-line interpolation. |
 | Interpolation | Custom module | 30s delayed playback — interpolates between two known poll positions along the shape. No prediction. See [animation-architecture.md](animation-architecture.md). |
 | Recording | `recorder/` module | DuckDB records raw feed data on every fresh poll. Exports to Parquet for historical playback. Enabled by default. |
-| Shared clock | Server-authoritative tick | The server stamps every broadcast with a canonical timestamp. All clients animate from the same reference point, so multiple open windows show vehicles in the same place. |
+| Shared clock | Server-authoritative tick | Every `WorldState` carries a canonical `tickTimeMs` (live = server emit time, playback = simulated world time). Clients derive constant-velocity motion segments from this shared clock, so multiple open windows show vehicles in the same place. |
 
 ### Data flow
 
@@ -71,8 +71,9 @@ See [animation-architecture.md](animation-architecture.md) for the full animatio
 - **No framework.** Vanilla TypeScript, TanStack Store, deck.gl pure JS API.
 - **Single render loop** at 60fps — handles both live and playback, no duplicate animation code.
 - **Route-based animation** — each vehicle animates along its cached GTFS route shape. Position, bearing, and trail are all sampled from the shape geometry.
+- **Motion segments on the world clock** — live and playback both append constant-velocity `{startDist,endDist,durationMs}` segments derived from `WorldState.tickTimeMs`. Semantic vehicle speed is display data, not the live animation clock.
 - **Arrows**: deck.gl `IconLayer` with canvas-generated arrow icon. Bearing from shape direction at current position.
-- **Trails**: deck.gl `PathLayer` — 800m slice of the route shape behind the arrow. Trail tail follows the arrow; "eats itself" when the arrow stops.
+- **Trails**: deck.gl `PathLayer` — 800m slice of the route shape behind the arrow. Trail tail follows the active segment velocity, then retracts once the segment queue drains.
 - **Client-side shape snapping** — for playback data (raw GPS with no `shapeDistTraveled`), the client snaps lat/lon to the cached route shape.
 - **Speed multiplier** — one function controls animation speed: live=1, playback=speed, paused=0.
 - **Mode colors**: blue (metro), green (tram), orange (bus), purple (V/Line).
@@ -111,7 +112,7 @@ See [animation-architecture.md](animation-architecture.md) for the full animatio
 These invariants exist to support the future time machine feature. Do not violate them.
 
 1. **`PollResult` is a pure serializable data object.** No side effects, no socket references. It can be written to disk.
-2. **`WorldState` is the single interchange format.** Both live WebSocket ticks and future historical playback must produce the same shape.
+2. **`WorldState` is the single interchange format.** Both live WebSocket ticks and historical playback produce the same shape, including canonical `tickTimeMs` for animation timing.
 3. **`applyTick()` accepts any `WorldState` regardless of source.** The rendering pipeline must not care whether data is live or replayed.
 4. **Client rendering has no dependency on WebSocket liveness.** Layers render from store state, not from the connection.
 

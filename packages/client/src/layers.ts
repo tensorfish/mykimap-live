@@ -1,5 +1,5 @@
 import { IconLayer, PathLayer } from "@deck.gl/layers";
-import type { VehiclePosition, TransportMode, SegmentSpeed } from "./types.js";
+import type { VehiclePosition, TransportMode, SegmentSpeed, WorldState } from "./types.js";
 import { createArrowIconURL, ARROW_ICON_MAPPING } from "./icons.js";
 
 // ── Colors ──
@@ -22,6 +22,10 @@ let arrowIconUrl: string | null = null;
 function getArrowIconUrl(): string {
   if (!arrowIconUrl) arrowIconUrl = createArrowIconURL(64);
   return arrowIconUrl;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max));
 }
 
 // ── Route shape cache ──
@@ -67,7 +71,7 @@ async function fetchAndCacheShape(v: VehiclePosition): Promise<void> {
 function sampleShapeAtDist(shape: CachedShape, dist: number): [number, number] | null {
   const { path, dists, totalDist } = shape;
   if (path.length < 2) return null;
-  const d = Math.max(0, Math.min(dist, totalDist));
+  const d = clamp(dist, 0, totalDist);
   for (let i = 0; i < path.length - 1; i++) {
     if (d >= dists[i]! && d <= dists[i + 1]!) {
       const segLen = dists[i + 1]! - dists[i]!;
@@ -83,8 +87,8 @@ function sampleShapeAtDist(shape: CachedShape, dist: number): [number, number] |
 
 function sliceShape(shape: CachedShape, fromDist: number, toDist: number): Array<[number, number]> {
   const { path, dists, totalDist } = shape;
-  const lo = Math.max(0, Math.min(fromDist, toDist));
-  const hi = Math.min(totalDist, Math.max(fromDist, toDist));
+  const lo = clamp(Math.min(fromDist, toDist), 0, totalDist);
+  const hi = clamp(Math.max(fromDist, toDist), 0, totalDist);
   const result: Array<[number, number]> = [];
   const startPos = sampleShapeAtDist(shape, lo);
   if (startPos) result.push(startPos);
@@ -160,21 +164,29 @@ function clientSnapToShape(v: VehiclePosition): number {
 
 // ── Animation state ──
 //
-// Simple model:
-// - Each vehicle has a queue of target distances (from server updates)
-// - currentDist advances toward the next target at a steady speed
-// - When it reaches a target, it pops and moves toward the next one
-// - When the queue is empty, the arrow stops and the trail fades
-// - Trail = shape slice from tailDist to currentDist
+// State model:
+// - Every WorldState tick contributes authoritative route-distance observations.
+// - Backlog/bootstrap replays historical ticks into the same motion-segment
+//   queue used by steady-state live mode.
+// - Each segment moves from startDist → endDist at constant velocity for its
+//   exact world-clock duration (tickTimeMs delta).
+// - When the segment queue is empty, the arrow is at the latest observed
+//   position and the trail tail fades back toward it.
+//
+// Relevant motion states (derived, not stored explicitly):
+// - SEGMENT_ACTIVE: segments.length > 0
+// - TRAIL_RETRACTING: segments.length === 0 && tailDist !== currentDist
+// - STOPPED: segments.length === 0 && tailDist === currentDist
+//
+// Invariant: live motion timing comes from authoritative WorldState.tickTimeMs,
+// not semantic vehicle speed. Semantic speed remains display/heatmap data only.
 
 const TRAIL_LENGTH_M = 800;
 const TRAIL_FADE_SPEED = 30;       // m/s when stopped — 800m trail fades in ~27s
-const ANIM_SPEED_MS = 15;          // m/s default animation speed
 const MIN_MOVE_THRESHOLD_M = 0.5;  // min dist change to register as movement
 const MIN_SPEED_DIST_M = 1;        // min dist change to compute speed
 const SNAP_CLOSE_THRESHOLD = 0.0005; // ~50m in degrees — local snap result is good enough
 const SNAP_MAX_DISTANCE = 0.003;    // ~300m in degrees — beyond this, vehicle is off-route
-const TARGET_REACHED_M = 0.5;      // distance to consider target reached
 
 // ── Congestion heatmap ──
 //
@@ -182,12 +194,10 @@ const TARGET_REACHED_M = 0.5;      // distance to consider target reached
 // As vehicles move through segments, their speed is recorded.
 // Segments are colored green → yellow → red by speed.
 // Old readings decay so the heatmap reflects current conditions.
-
-// ── Congestion heatmap ──
 //
 // On connect, the server sends a 10-min snapshot of per-segment speeds
 // to seed the client. After that, the client accumulates locally from
-// vehicle movements in feedTick.
+// vehicle movements in feedWorldState().
 
 const SEGMENT_LEN = 200; // must match server CONGESTION_SEGMENT_LEN
 const HEATMAP_WINDOW_S = 600; // 10-minute sliding window
@@ -208,6 +218,24 @@ let heatmapDirty = true;
 let cachedHeatmapLayer: PathLayer | null = null;
 let cachedHeatmapTs = 0;
 
+function getOrCreateRouteHeatmap(routeId: string, mode: TransportMode): RouteHeatmap {
+  let route = heatmapData.get(routeId);
+  if (!route) {
+    route = { mode, segments: new Map() };
+    heatmapData.set(routeId, route);
+  }
+  return route;
+}
+
+function getOrCreateSegmentBuffer(route: RouteHeatmap, segIdx: number): SpeedSample[] {
+  let buf = route.segments.get(segIdx);
+  if (!buf) {
+    buf = [];
+    route.segments.set(segIdx, buf);
+  }
+  return buf;
+}
+
 /** Mode baseline speeds (m/s) for color normalization */
 const MODE_BASELINE_SPEED: Record<TransportMode, number> = {
   tram: 8.3,   // ~30 km/h
@@ -225,11 +253,8 @@ export function seedHeatmap(congestion: SegmentSpeed[], nowTs: number): void {
   heatmapData.clear();
   heatmapDirty = true;
   for (const seg of congestion) {
-    let route = heatmapData.get(seg.routeId);
-    if (!route) {
-      route = { mode: seg.mode, segments: new Map() };
-      heatmapData.set(seg.routeId, route);
-    }
+    const route = getOrCreateRouteHeatmap(seg.routeId, seg.mode);
+
     // Spread the server's sample count across the window as synthetic samples
     // so the sliding window average matches the server's value
     const samples: SpeedSample[] = [];
@@ -247,20 +272,12 @@ export function seedHeatmap(congestion: SegmentSpeed[], nowTs: number): void {
  * 200m segments, and all of them should get the speed reading.
  */
 function recordSegmentSpeed(routeId: string, mode: TransportMode, prevDist: number, dist: number, speed: number, vehicleTs: number): void {
-  let route = heatmapData.get(routeId);
-  if (!route) {
-    route = { mode, segments: new Map() };
-    heatmapData.set(routeId, route);
-  }
+  const route = getOrCreateRouteHeatmap(routeId, mode);
   const fromSeg = Math.max(0, Math.floor(Math.min(prevDist, dist) / SEGMENT_LEN));
   const toSeg = Math.max(0, Math.floor(Math.max(prevDist, dist) / SEGMENT_LEN));
 
   for (let seg = fromSeg; seg <= toSeg; seg++) {
-    let buf = route.segments.get(seg);
-    if (!buf) {
-      buf = [];
-      route.segments.set(seg, buf);
-    }
+    const buf = getOrCreateSegmentBuffer(route, seg);
     if (buf.length > 0 && buf[buf.length - 1]!.ts === vehicleTs) continue;
     buf.push({ ts: vehicleTs, speed });
     if (buf.length > HEATMAP_MAX_SAMPLES) buf.shift();
@@ -324,24 +341,136 @@ function speedToColor(ratio: number): [number, number, number, number] {
   return [Math.floor(r * 255), Math.floor(g * 200), 30, 160];
 }
 
+function findShapeForHeatmap(routeId: string): CachedShape | null {
+  const direct = shapeCache.get(routeId);
+  if (direct) return direct;
+
+  for (const [key, val] of shapeCache) {
+    if (val && key.includes(routeId)) return val;
+  }
+  return null;
+}
+
+interface MotionSegment {
+  startDist: number;
+  endDist: number;
+  durationMs: number;
+  elapsedMs: number;
+}
+
 interface VehicleAnim {
   currentDist: number;
   tailDist: number;
-  targets: number[];
-  speed: number;
+  segments: MotionSegment[];
   direction: number;
-  shapeKey: string;
-  lastTs: number; // vehicle timestamp from last feed
-  lastHeatmapDist: number; // previous dist for heatmap segment fill
-  lastSpeedDist: number; // dist at last timestamp change, for correct speed calc
+  lastSeq: number;
+  lastTickTimeMs: number;
+  lastObservedDist: number;
+  lastVehicleTs: number;
+  lastHeatmapDist: number;
+  lastSpeedDist: number;
+  displaySpeed: number;
 }
 
 const anims = new Map<string, VehicleAnim>();
+let lastProcessedWorldSeq = -1;
 
-/** Clear all animation state (used when switching playback dates) */
+function createAnimState(v: VehiclePosition, dist: number, seq: number, tickTimeMs: number): VehicleAnim {
+  return {
+    currentDist: dist,
+    tailDist: dist,
+    segments: [],
+    direction: 1,
+    lastSeq: seq,
+    lastTickTimeMs: tickTimeMs,
+    lastObservedDist: dist,
+    lastVehicleTs: v.timestamp,
+    lastHeatmapDist: dist,
+    lastSpeedDist: dist,
+    displaySpeed: v.speed,
+  };
+}
+
+function appendMotionSegment(anim: VehicleAnim, nextDist: number, nextTickTimeMs: number): number {
+  const moveDist = Math.abs(nextDist - anim.lastObservedDist);
+  const durationMs = Math.max(1, nextTickTimeMs - anim.lastTickTimeMs);
+
+  if (moveDist > MIN_MOVE_THRESHOLD_M) {
+    anim.segments.push({
+      startDist: anim.lastObservedDist,
+      endDist: nextDist,
+      durationMs,
+      elapsedMs: 0,
+    });
+  }
+
+  anim.lastObservedDist = nextDist;
+  anim.lastTickTimeMs = nextTickTimeMs;
+  return moveDist;
+}
+
+function advanceAnimSegments(anim: VehicleAnim, dtMs: number): void {
+  if (anim.segments.length === 0) return;
+
+  let remainingMs = dtMs;
+  while (remainingMs > 0 && anim.segments.length > 0) {
+    const seg = anim.segments[0]!;
+    const newDirection = seg.endDist >= seg.startDist ? 1 : -1;
+
+    if (newDirection !== anim.direction) {
+      anim.tailDist = anim.currentDist;
+      anim.direction = newDirection;
+    }
+
+    const segRemainingMs = Math.max(0, seg.durationMs - seg.elapsedMs);
+    if (remainingMs >= segRemainingMs) {
+      seg.elapsedMs = seg.durationMs;
+      anim.currentDist = seg.endDist;
+      remainingMs -= segRemainingMs;
+      anim.segments.shift();
+      continue;
+    }
+
+    seg.elapsedMs += remainingMs;
+    const t = seg.durationMs > 0 ? seg.elapsedMs / seg.durationMs : 1;
+    anim.currentDist = seg.startDist + (seg.endDist - seg.startDist) * t;
+    remainingMs = 0;
+  }
+}
+
+function advanceTrail(anim: VehicleAnim, shape: CachedShape, dtMs: number): void {
+  const isMoving = anim.segments.length > 0;
+  const idealTail = anim.currentDist - (TRAIL_LENGTH_M * anim.direction);
+
+  if (anim.direction > 0) {
+    if (isMoving && anim.tailDist < idealTail) {
+      const trailSpeed = anim.segments[0]
+        ? Math.abs(anim.segments[0]!.endDist - anim.segments[0]!.startDist) / Math.max(anim.segments[0]!.durationMs / 1000, 0.001)
+        : 0;
+      anim.tailDist = Math.min(anim.tailDist + trailSpeed * (dtMs / 1000), idealTail);
+    }
+    if (!isMoving && anim.tailDist < anim.currentDist) {
+      anim.tailDist = Math.min(anim.tailDist + TRAIL_FADE_SPEED * (dtMs / 1000), anim.currentDist);
+    }
+  } else {
+    if (isMoving && anim.tailDist > idealTail) {
+      const trailSpeed = anim.segments[0]
+        ? Math.abs(anim.segments[0]!.endDist - anim.segments[0]!.startDist) / Math.max(anim.segments[0]!.durationMs / 1000, 0.001)
+        : 0;
+      anim.tailDist = Math.max(anim.tailDist - trailSpeed * (dtMs / 1000), idealTail);
+    }
+    if (!isMoving && anim.tailDist > anim.currentDist) {
+      anim.tailDist = Math.max(anim.tailDist - TRAIL_FADE_SPEED * (dtMs / 1000), anim.currentDist);
+    }
+  }
+
+  anim.tailDist = clamp(anim.tailDist, 0, shape.totalDist);
+}
+
 /** Clear all animation and snap state. Called on playback date switch and seek. */
 export function clearAnimations(): void {
   anims.clear();
+  lastProcessedWorldSeq = -1;
   // NOTE: snapCache is intentionally preserved across seeks.
   // It caches entityId → shapeDist projections. Clearing it forces
   // expensive full-scan recomputation for ~3,500 vehicles.
@@ -350,109 +479,71 @@ export function clearAnimations(): void {
 
 // ── Feed data ──
 
-/** Process WebSocket init backlog — build animation queues from historical ticks. */
-export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): void {
+/** Process WebSocket init backlog — build the same motion-segment queue used by live ticks. */
+export function feedBacklog(backlog: WorldState[]): void {
   if (backlog.length === 0) return;
-
-  // Build a queue of positions per vehicle from ALL backlog ticks.
-  // The arrow starts at the oldest position and animates through each one.
-  const vehicleHistory = new Map<string, { dists: number[]; v: VehiclePosition }>();
-
-  for (const tick of backlog) {
-    for (const v of tick.vehicles) {
-      fetchAndCacheShape(v);
-      const dist = clientSnapToShape(v);
-      if (dist < 0) continue;
-
-      let entry = vehicleHistory.get(v.entityId);
-      if (!entry) {
-        entry = { dists: [], v };
-        vehicleHistory.set(v.entityId, entry);
-      }
-      // Only add if position actually changed
-      const lastDist = entry.dists[entry.dists.length - 1];
-      if (lastDist === undefined || Math.abs(dist - lastDist) > MIN_MOVE_THRESHOLD_M) {
-        entry.dists.push(dist);
-      }
-      entry.v = v; // keep latest vehicle data
-    }
+  if (backlog[backlog.length - 1]!.seq <= lastProcessedWorldSeq) {
+    clearAnimations();
   }
-
-  // Create animation states: start at first position, queue the rest
-  for (const [entityId, { dists, v }] of vehicleHistory) {
-    if (dists.length === 0) continue;
-    const startDist = dists[0]!;
-    const targets = dists.slice(1); // everything after the starting position
-    const dir = targets.length > 0 ? (targets[0]! >= startDist ? 1 : -1) : 1;
-
-    anims.set(entityId, {
-      currentDist: startDist,
-      tailDist: startDist,
-      targets,
-      speed: ANIM_SPEED_MS,
-      direction: dir,
-      shapeKey: getShapeCacheKey(v),
-      lastTs: 0,
-      lastHeatmapDist: startDist,
-      lastSpeedDist: startDist,
-    });
+  for (const tick of backlog) {
+    feedWorldState(tick);
   }
 }
 
-/** Process a single tick of vehicle data — update animation targets and heatmap. */
-export function feedTick(vehicles: VehiclePosition[]): void {
+/** Process one authoritative world tick into per-vehicle motion segments. */
+export function feedWorldState(state: WorldState): void {
+  if (state.seq < lastProcessedWorldSeq) {
+    clearAnimations();
+  } else if (state.seq === lastProcessedWorldSeq) {
+    return;
+  }
+  lastProcessedWorldSeq = state.seq;
+
   const seen = new Set<string>();
 
-  for (const v of vehicles) {
+  for (const v of state.vehicles) {
     seen.add(v.entityId);
     fetchAndCacheShape(v);
     const dist = clientSnapToShape(v);
     if (dist < 0) continue;
 
     const existing = anims.get(v.entityId);
-    if (existing) {
-      const lastTarget = existing.targets[existing.targets.length - 1] ?? existing.currentDist;
-      const moveDist = Math.abs(dist - lastTarget);
-
-      if (moveDist > MIN_MOVE_THRESHOLD_M) {
-        existing.targets.push(dist);
-      }
-
-      // Update speed when the vehicle's feed timestamp changes (actual new GPS fix).
-      // Use total distance from the previous timestamp change, not the last queued
-      // target — the queue accumulates many small interpolated steps from 1s broadcasts,
-      // but the real vehicle movement spans the full ~30s feed update interval.
-      if (v.timestamp !== existing.lastTs && existing.lastTs > 0) {
-        const speedDist = Math.abs(dist - existing.lastSpeedDist);
-        const dt = v.timestamp - existing.lastTs;
-        if (dt > 0) {
-          existing.speed = speedDist > MIN_SPEED_DIST_M ? speedDist / dt : 0;
-        }
-        existing.lastSpeedDist = dist;
-      }
-
-      // Record into heatmap when vehicle timestamp changes (actual feed update).
-      // Fill ALL segments between previous and current position.
-      if (v.timestamp !== existing.lastTs && existing.lastTs > 0) {
-        recordSegmentSpeed(getShapeCacheKey(v), v.mode, existing.lastHeatmapDist, dist, existing.speed, v.timestamp);
-        existing.lastHeatmapDist = dist;
-      }
-
-      existing.lastTs = v.timestamp;
-    } else {
-      // New vehicle — place at this position, no targets yet
-      anims.set(v.entityId, {
-        currentDist: dist,
-        tailDist: dist,
-        targets: [],
-        speed: ANIM_SPEED_MS,
-        direction: 1,
-        shapeKey: getShapeCacheKey(v),
-        lastTs: v.timestamp,
-        lastHeatmapDist: dist,
-        lastSpeedDist: dist,
-      });
+    if (!existing) {
+      anims.set(v.entityId, createAnimState(v, dist, state.seq, state.tickTimeMs));
+      continue;
     }
+
+    const tsChanged = v.timestamp !== existing.lastVehicleTs;
+    const moveDist = appendMotionSegment(existing, dist, state.tickTimeMs);
+
+    if (v.speed > 0) {
+      existing.displaySpeed = v.speed;
+    } else if (tsChanged && existing.lastVehicleTs > 0) {
+      const dt = v.timestamp - existing.lastVehicleTs;
+      const speedDist = Math.abs(dist - existing.lastSpeedDist);
+      existing.displaySpeed = dt > 0 && speedDist > MIN_SPEED_DIST_M ? speedDist / dt : 0;
+    } else if (moveDist <= MIN_MOVE_THRESHOLD_M && existing.segments.length === 0) {
+      existing.displaySpeed = 0;
+    }
+
+    if (tsChanged && existing.lastVehicleTs > 0) {
+      recordSegmentSpeed(
+        getShapeCacheKey(v),
+        v.mode,
+        existing.lastHeatmapDist,
+        dist,
+        existing.displaySpeed,
+        v.timestamp,
+      );
+      existing.lastHeatmapDist = dist;
+      existing.lastSpeedDist = dist;
+      existing.lastVehicleTs = v.timestamp;
+    } else if (tsChanged) {
+      existing.lastSpeedDist = dist;
+      existing.lastVehicleTs = v.timestamp;
+    }
+
+    existing.lastSeq = state.seq;
   }
 
   for (const id of anims.keys()) {
@@ -475,6 +566,55 @@ export interface DisplayVehicle {
   vehicleLabel: string;
 }
 
+function createFallbackDisplay(v: VehiclePosition): DisplayVehicle {
+  return {
+    entityId: v.entityId,
+    mode: v.mode,
+    position: [v.longitude, v.latitude],
+    angle: -v.bearing,
+    stale: v.stale,
+    speed: v.speed,
+    bearing: v.bearing,
+    routeId: v.routeId,
+    vehicleId: v.vehicleId,
+    vehicleLabel: v.vehicleLabel,
+  };
+}
+
+function computeShapeBearing(shape: CachedShape, anim: VehicleAnim, pos: [number, number]): number {
+  const LOOK_DIST = 50;
+  const behindPos = sampleShapeAtDist(shape, clamp(anim.currentDist - LOOK_DIST * anim.direction, 0, shape.totalDist));
+  const aheadPos = sampleShapeAtDist(shape, clamp(anim.currentDist + LOOK_DIST * anim.direction, 0, shape.totalDist));
+
+  const bearings: number[] = [];
+  if (behindPos && (Math.abs(pos[0] - behindPos[0]) > 1e-8 || Math.abs(pos[1] - behindPos[1]) > 1e-8)) {
+    bearings.push(((Math.atan2(pos[0] - behindPos[0], pos[1] - behindPos[1]) * 180 / Math.PI) + 360) % 360);
+  }
+  if (aheadPos && (Math.abs(aheadPos[0] - pos[0]) > 1e-8 || Math.abs(aheadPos[1] - pos[1]) > 1e-8)) {
+    bearings.push(((Math.atan2(aheadPos[0] - pos[0], aheadPos[1] - pos[1]) * 180 / Math.PI) + 360) % 360);
+  }
+
+  if (bearings.length === 0) return 0;
+  const sinSum = bearings.reduce((sum, b) => sum + Math.sin(b * Math.PI / 180), 0);
+  const cosSum = bearings.reduce((sum, b) => sum + Math.cos(b * Math.PI / 180), 0);
+  return ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
+}
+
+function createAnimatedDisplay(v: VehiclePosition, position: [number, number], bearing: number, anim: VehicleAnim): DisplayVehicle {
+  return {
+    entityId: v.entityId,
+    mode: v.mode,
+    position,
+    angle: -bearing,
+    stale: v.stale,
+    speed: v.speed > 0 ? v.speed : anim.displaySpeed,
+    bearing,
+    routeId: v.routeId,
+    vehicleId: v.vehicleId,
+    vehicleLabel: v.vehicleLabel,
+  };
+}
+
 /** Advance all vehicle animations by dtMs and return display-ready positions. */
 export function computeFrame(vehicles: VehiclePosition[], dtMs: number): DisplayVehicle[] {
   return vehicles.map((v) => {
@@ -482,118 +622,24 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
     const shape = shapeCache.get(getShapeCacheKey(v));
 
     if (!anim || !shape || v.stale) {
-      return {
-        entityId: v.entityId, mode: v.mode,
-        position: [v.longitude, v.latitude] as [number, number],
-        angle: -v.bearing, stale: v.stale, speed: v.speed,
-        bearing: v.bearing, routeId: v.routeId,
-        vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
-      };
+      return createFallbackDisplay(v);
     }
 
-    // Advance toward target at constant velocity.
-    // When queue is empty, hold position (don't coast — coasting
-    // overshoots and causes oscillation when the next target
-    // arrives behind the arrow).
-    if (anim.targets.length > 0) {
-      const target = anim.targets[0]!;
-      const newDirection = target >= anim.currentDist ? 1 : -1;
+    // Advance along authoritative motion segments at constant velocity.
+    // Segment timing comes from WorldState.tickTimeMs, not semantic
+    // vehicle speed, so live mode follows the same world-clock contract
+    // as backlog/bootstrap.
+    advanceAnimSegments(anim, dtMs);
+    anim.currentDist = clamp(anim.currentDist, 0, shape.totalDist);
+    advanceTrail(anim, shape, dtMs);
 
-      // When direction flips, reset tail to current position.
-      // Otherwise the trail ends up on the wrong side (appears "in the future").
-      if (newDirection !== anim.direction) {
-        anim.tailDist = anim.currentDist;
-        anim.direction = newDirection;
-      }
-
-      const advance = anim.speed * (dtMs / 1000);
-
-      if (anim.direction > 0) {
-        anim.currentDist = Math.min(anim.currentDist + advance, target);
-      } else {
-        anim.currentDist = Math.max(anim.currentDist - advance, target);
-      }
-
-      if (Math.abs(anim.currentDist - target) < TARGET_REACHED_M) {
-        anim.currentDist = target;
-        anim.targets.shift();
-      }
-    }
-
-    anim.currentDist = Math.max(0, Math.min(anim.currentDist, shape.totalDist));
-
-    // Trail: follows while moving, fades when stopped
-    const isMoving = anim.targets.length > 0;
-    const idealTail = anim.currentDist - (TRAIL_LENGTH_M * anim.direction);
-
-    if (anim.direction > 0) {
-      if (isMoving && anim.tailDist < idealTail) {
-        anim.tailDist += anim.speed * (dtMs / 1000);
-        anim.tailDist = Math.min(anim.tailDist, idealTail);
-      }
-      if (!isMoving && anim.tailDist < anim.currentDist) {
-        anim.tailDist += TRAIL_FADE_SPEED * (dtMs / 1000);
-        anim.tailDist = Math.min(anim.tailDist, anim.currentDist);
-      }
-    } else {
-      if (isMoving && anim.tailDist > idealTail) {
-        anim.tailDist -= anim.speed * (dtMs / 1000);
-        anim.tailDist = Math.max(anim.tailDist, idealTail);
-      }
-      if (!isMoving && anim.tailDist > anim.currentDist) {
-        anim.tailDist -= TRAIL_FADE_SPEED * (dtMs / 1000);
-        anim.tailDist = Math.max(anim.tailDist, anim.currentDist);
-      }
-    }
-    anim.tailDist = Math.max(0, Math.min(anim.tailDist, shape.totalDist));
-
-    // Sample position + bearing from shape
     const pos = sampleShapeAtDist(shape, anim.currentDist);
     if (!pos) {
-      return {
-        entityId: v.entityId, mode: v.mode,
-        position: [v.longitude, v.latitude] as [number, number],
-        angle: -v.bearing, stale: v.stale, speed: v.speed,
-        bearing: v.bearing, routeId: v.routeId,
-        vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
-      };
+      return createFallbackDisplay(v);
     }
 
-    // Bearing from movement direction on shape.
-    // Sample two points — one behind and one ahead — and average the
-    // bearing from each to the current position. This prevents flipping
-    // at shape inflection points where a single lookBehind can invert.
-    const LOOK_DIST = 50; // meters
-    const clamp = (d: number) => Math.max(0, Math.min(d, shape.totalDist));
-    const behindPos = sampleShapeAtDist(shape, clamp(anim.currentDist - LOOK_DIST * anim.direction));
-    const aheadPos = sampleShapeAtDist(shape, clamp(anim.currentDist + LOOK_DIST * anim.direction));
-
-    let bearing = 0;
-    const bearings: number[] = [];
-    if (behindPos && (Math.abs(pos[0] - behindPos[0]) > 1e-8 || Math.abs(pos[1] - behindPos[1]) > 1e-8)) {
-      bearings.push(((Math.atan2(pos[0] - behindPos[0], pos[1] - behindPos[1]) * 180 / Math.PI) + 360) % 360);
-    }
-    if (aheadPos && (Math.abs(aheadPos[0] - pos[0]) > 1e-8 || Math.abs(aheadPos[1] - pos[1]) > 1e-8)) {
-      bearings.push(((Math.atan2(aheadPos[0] - pos[0], aheadPos[1] - pos[1]) * 180 / Math.PI) + 360) % 360);
-    }
-    if (bearings.length > 0) {
-      // Circular average to handle 0°/360° wraparound
-      const sinSum = bearings.reduce((s, b) => s + Math.sin(b * Math.PI / 180), 0);
-      const cosSum = bearings.reduce((s, b) => s + Math.cos(b * Math.PI / 180), 0);
-      bearing = ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
-    }
-
-    // Display speed: prefer server-computed v.speed (live mode, averaged over
-    // ~60s) when available; fall back to client-computed anim.speed (playback).
-    const displaySpeed = v.speed > 0 ? v.speed : anim.speed;
-
-    return {
-      entityId: v.entityId, mode: v.mode,
-      position: pos, angle: -bearing,
-      stale: v.stale, speed: displaySpeed,
-      bearing, routeId: v.routeId,
-      vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
-    };
+    const bearing = computeShapeBearing(shape, anim, pos);
+    return createAnimatedDisplay(v, pos, bearing, anim);
   });
 }
 
@@ -662,7 +708,7 @@ export function createTrailLayer(vehicles: VehiclePosition[], selectedId: string
 
 /**
  * Render congestion heatmap from locally accumulated speed data.
- * Seeded by server on connect, then maintained by feedTick.
+ * Seeded by server on connect, then maintained by feedWorldState().
  */
 export function createHeatmapLayer(nowTs: number): PathLayer {
   // Return cached layer if data hasn't changed (avoid O(routes×segments) every frame)
@@ -682,14 +728,7 @@ export function createHeatmapLayer(nowTs: number): PathLayer {
   const segments: HeatSegment[] = [];
 
   for (const [routeId, route] of heatmapData) {
-    // Shape cache may be keyed by routeId or tripId — try both
-    let shape = shapeCache.get(routeId);
-    if (!shape) {
-      // Scan for a cache entry whose key contains this routeId
-      for (const [key, val] of shapeCache) {
-        if (val && key.includes(routeId)) { shape = val; break; }
-      }
-    }
+    const shape = findShapeForHeatmap(routeId);
     if (!shape) continue;
 
     const baseline = MODE_BASELINE_SPEED[route.mode] ?? 10;

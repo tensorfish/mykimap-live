@@ -3,10 +3,13 @@
 ## [Unreleased]
 
 ### Bug Fixes
+- **Fixed live animation contract drift** — live mode no longer chases server-authored positions using semantic vehicle speed from GTFS timestamps. The client now converts successive authoritative `WorldState`s into constant-velocity motion segments timed by `tickTimeMs`, so steady-state live mode matches the smooth startup/backlog behavior and trails retract only after the segment queue drains.
+- **Fixed trail retrace / stop-state drift in long-running live sessions** — the client could enter an illegal state where live ticks had queued movement targets but `speed = 0`, especially after stop→move transitions. That left arrows unable to advance while trails stayed in a broken moving/fading state. Fixed by adopting server-computed live speed immediately, coalescing repeated broadcasts from the same underlying vehicle timestamp into a single latest target, and only using client-derived speed for playback/raw snapshots.
+- **Fixed animation freeze after tab background** — the `requestAnimationFrame` loop had no dtMs cap, no visibility change handler, no try/finally guard, and only consumed one animation target per frame. After the browser backgrounded the tab (pausing rAF while WebSocket data kept arriving), targets accumulated unboundedly. On tab restore, a single massive time delta was wasted on one target, the queue could never drain, and arrows appeared permanently frozen. Fixed with four changes: (1) cap dtMs at 100ms, (2) reset frame clock on `visibilitychange`, (3) wrap render loop in try/finally so exceptions can't kill rAF, (4) process multiple targets per frame using an advance budget loop.
 - **Fixed incorrect "Avg Speed" display for vehicles** — both live view and replay showed wrong speeds. The client-side speed calculation divided a single interpolation step (~1s of movement) by the full feed update interval (~30s), producing values ~30× too low. Fixed by tracking total distance between feed timestamp changes. In live mode, the server-computed average speed is now preferred for display.
 
 ### Architecture
-- **Single animation pipeline** — live and playback share the same `feedTick` → `computeFrame` → render chain. No duplicate animation code.
+- **Single animation pipeline** — live and playback share the same `feedWorldState` → `computeFrame` → render chain. No duplicate animation code.
 - **Route-based animation** — vehicles animate along cached GTFS route shapes. Position, bearing, and trail all derived from shape geometry.
 - **30s delayed playback** — server interpolates between two known poll positions. No prediction, no overshoot.
 - **Client-side shape snapping** — playback data (raw GPS) is snapped to route shapes on the client, enabling the same animation as live data.

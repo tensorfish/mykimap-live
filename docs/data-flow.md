@@ -138,13 +138,15 @@ flowchart LR
     end
     SOURCES --> AT["applyTick()"]
     AT --> STORE["TanStack Store"]
-    STORE --> FT["feedTick()"]
+    STORE --> FT["feedWorldState()"]
     FT --> SNAP["clientSnapToShape()"]
     SNAP --> CF["computeFrame(dtMs × speed)"]
     CF --> RENDER["deck.gl render"]
 ```
 
 One render loop. One speed multiplier. Zero duplicate animation code.
+
+Live animation rule: each authoritative `WorldState` appends at most one constant-velocity motion segment per vehicle. Segment duration comes from `WorldState.tickTimeMs` on the shared world clock, not the semantic `VehiclePosition.speed` field. Backlog bootstrap replays the same segment model, so startup and steady-state live mode use the same motion contract.
 
 ## Key timing constants
 

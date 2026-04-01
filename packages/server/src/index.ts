@@ -22,9 +22,9 @@ let broadcastTimer: ReturnType<typeof setInterval> | null = null;
 let broadcastSeq = 0;
 
 /** Recent broadcast ticks sent to new clients on connect.
- *  Client places arrows at the oldest position and animates them
- *  forward to the latest over ~3 seconds. Larger backlog = more
- *  visible initial movement. At 1 tick/s, 15 ticks = 15s of travel. */
+ *  Client replays backlog ticks into the same world-clock motion-segment
+ *  queue used by steady-state live mode. Larger backlog = more visible
+ *  initial movement. At 1 tick/s, 15 ticks = ~15s of travel history. */
 const BACKLOG_SIZE = 15;
 const tickBacklog: WorldState[] = [];
 
@@ -196,6 +196,7 @@ function broadcastCycle(): void {
   broadcastSeq++;
   const state: WorldState = {
     timestamp: Math.floor(now / 1000),
+    tickTimeMs: now,
     vehicles: interpolated,
     alerts: currentAlerts,
     congestion: [],

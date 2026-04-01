@@ -27,7 +27,7 @@ flowchart TB
         MAPBOX[Mapbox GL JS\ndark base map] ~~~ DECK
     end
 
-    GTFS -- "HTTP + protobuf\n10 feeds × 7s\n~558 KB/poll" --> SERVER
+    GTFS -- "HTTP + protobuf\n10 feeds × 15s\n~558 KB/poll" --> SERVER
     SERVER -- "WebSocket JSON\n~1s ticks" --> CLIENT
 ```
 
@@ -35,10 +35,10 @@ flowchart TB
 
 ### Responsibilities
 
-1. **Poll** 10 GTFS-RT feeds every 7 seconds in parallel
+1. **Poll** 10 GTFS-RT feeds every 15 seconds in parallel
 2. **Decode** Protocol Buffer responses into typed vehicle positions, trip updates, and service alerts
 3. **Snap** each vehicle onto its GTFS route shape polyline (`trip_id` → `shape_id`). Calculate speed from distance traveled along the shape.
-4. **Interpolate** between polls: traverse from previous position (origin) to new position (target) along the shape, then project forward. No teleporting, no building-cutting.
+4. **Interpolate** between polls: produce a server-authoritative stream of route-distance targets on a canonical tick clock. No teleporting, no building-cutting.
 5. **Broadcast** the interpolated world state to all connected WebSocket clients every ~1 second
 
 ### State machine
@@ -90,4 +90,4 @@ No React or any UI framework. The store subscription drives both the deck.gl lay
 - Arrow size scales by mode — trains largest, buses smallest
 - A **snail trail** (fading path) follows each moving vehicle, showing its recent trajectory
 - Trails are drawn as `PathLayer` underneath the arrows, using matching mode colors at reduced opacity
-- Arrow rotation and position both use deck.gl's built-in `transitions` for smooth animation between 1-second server ticks
+- The client converts successive authoritative ticks into constant-velocity motion segments on a shared world clock (`tickTimeMs`), so live movement and startup backlog use the same animation contract

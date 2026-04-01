@@ -7,13 +7,13 @@ How vehicles animate smoothly — the same system for both live and playback.
 ## Single Pipeline
 
 ```
-Data source → applyTick(WorldState) → store → feedTick → computeFrame(60fps) → render
+Data source → applyTick(WorldState) → store → feedWorldState(WorldState) → computeFrame(60fps) → render
 ```
 
 **Live mode:** WebSocket ticks every 1s → `applyTick`
 **Playback mode:** In-memory snapshot array → `advancePlayback(dtMs)` → `applyTick`
 
-Both feed into the same `feedTick` → `computeFrame` → render chain. No separate animation code for playback.
+Both feed into the same `feedWorldState` → `computeFrame` → render chain. No separate animation code for playback.
 
 ---
 
@@ -27,16 +27,27 @@ Vehicles don't lerp between raw lat/lon positions (that cuts through buildings).
 
 3. **Animation state** — each vehicle has a `VehicleAnim`:
    - `currentDist` — where the arrow IS right now (meters along shape)
-   - `targetDist` — where it should be (from latest data)
    - `tailDist` — where the trail tail is
-   - `speed` — meters/second, inferred from consecutive positions
+   - `segments[]` — queued motion segments, each `{ startDist, endDist, durationMs, elapsedMs }`
    - `direction` — +1 or -1 along shape
+   - `displaySpeed` — semantic speed shown in the UI. Used for labels/heatmap, **not** as the live animation clock.
 
-4. **Per-frame advancement** — `computeFrame(dtMs)` advances `currentDist` toward `targetDist` at `speed`. Position is sampled from the shape at `currentDist`. The arrow follows every curve of the route.
+   Every `WorldState` also carries `tickTimeMs` — the authoritative world time for that tick. Live mode uses server emit time. Playback uses simulated world time (`snapshot.timestamp * 1000`).
+
+   Derived motion states:
+   - `SEGMENT_ACTIVE` — there is at least one active or queued motion segment
+   - `TRAIL_RETRACTING` — no remaining segments, but `tailDist` has not yet caught up to `currentDist`
+   - `STOPPED` — no remaining segments and `tailDist === currentDist`
+
+4. **Per-frame advancement** — `computeFrame(dtMs)` advances through motion segments at constant velocity. For each segment, position is linear in time between `startDist` and `endDist` for exactly `durationMs`. The render loop passes `dtMs × speedMultiplier`, so playback compresses or expands world time without changing the segment logic.
+
+   Live contract: each new authoritative `WorldState` appends at most one new motion segment per vehicle. Segment duration comes from `tickTimeMs` deltas on the world clock — **not** from per-vehicle GTFS timestamps or semantic `speed`.
 
 5. **Bearing** — computed from two points on the shape near `currentDist` (10m behind and current). Always correct regardless of shape polyline direction.
 
-6. **Trail** — `tailDist` follows the arrow at the same speed, maintaining 800m behind. When the arrow stops, the tail catches up ("eats itself"). Trail is a slice of the actual route shape from `tailDist` to `currentDist`.
+6. **Trail** — `tailDist` follows the arrow at the current segment's velocity, maintaining 800m behind while motion is active. When the segment queue drains, the tail catches up ("eats itself"). Trail is a slice of the actual route shape from `tailDist` to `currentDist`.
+
+   Invariant: trail retraction begins only when there is no active segment and no queued future segment. Live mode must never be left in a pseudo-moving state by semantic speed drift.
 
 ---
 
@@ -61,13 +72,24 @@ One `requestAnimationFrame` loop in `map.ts`:
 
 ```ts
 function renderFrame(now) {
-  dtMs = now - lastFrameTime;
-  advancePlayback(dtMs);          // no-op in live mode
-  display = computeFrame(dtMs * speedMult);
-  deck.setProps({ layers: [...] });
-  requestAnimationFrame(renderFrame);
+  try {
+    dtMs = Math.min(now - lastFrameTime, 100); // capped at 100ms
+    advancePlayback(dtMs);          // no-op in live mode
+    display = computeFrame(dtMs * speedMult);
+    deck.setProps({ layers: [...] });
+  } catch (e) {
+    console.error(e);
+  } finally {
+    requestAnimationFrame(renderFrame); // ALWAYS reschedule
+  }
 }
 ```
+
+**Defensive measures:**
+- **dtMs capped at 100ms** — prevents huge time jumps after the tab was backgrounded (rAF pauses but WebSocket keeps delivering data, so targets accumulate).
+- **`visibilitychange` listener** — resets `lastFrameTime` when the tab becomes visible, so the first frame after restore gets a clean delta instead of minutes.
+- **try/finally** — an unhandled exception must never kill the render loop. The `requestAnimationFrame` call is in the `finally` block.
+- **Store subscriber try/catch** — `feedWorldState` errors are caught so they don't break the TanStack Store subscription chain.
 
 No second rAF loop for playback. `play()` and `pause()` just set boolean flags.
 
@@ -83,8 +105,8 @@ GTFS-RT feed (every ~30s)
   → server interpolate (30s delayed playback, advance along shape)
   → broadcast via WebSocket (every 1s)
   → client applyTick → store
-  → feedTick: update animation target from shapeDistTraveled
-  → computeFrame: advance arrow along shape at 60fps
+  → feedWorldState: append constant-velocity motion segments from `shapeDistTraveled` + `tickTimeMs`
+  → computeFrame: advance arrow along shape at 60fps on the world clock
   → render: arrows + trails + route shapes
 ```
 
@@ -97,7 +119,7 @@ User picks date
   → chunk manager: register in DuckDB-WASM, decode, build timelines
   → advancePlayback: advance timestamp, feed snapshot when crossed
   → applyTick → store
-  → feedTick: clientSnapToShape (raw GPS → shapeDist), update target
+  → feedWorldState: clientSnapToShape (raw GPS → shapeDist), append motion segments
   → computeFrame: advance arrow along shape at 60fps × speed multiplier
   → render: arrows + trails + route shapes
 
@@ -112,7 +134,7 @@ Seek to unloaded time:
 
 Playback does **not** download the entire day's Parquet upfront. The chunk manager (`playback-chunks.ts`) streams 30-minute chunks on demand. A buffer bar on the slider shows loaded ranges (like YouTube's gray bar).
 
-The only difference from live mode is the first steps (metadata → chunk → decode). Everything from `feedTick` onward is identical.
+The only difference from live mode is the first steps (metadata → chunk → decode). Everything from `feedWorldState` onward is identical.
 
 ---
 
@@ -133,8 +155,8 @@ This is the same algorithm as the server's `snapToShape()` but runs on the clien
 When the page loads:
 
 1. Server sends 15-tick backlog on WebSocket connect
-2. `feedBacklog` processes all ticks, places arrows at the oldest position
-3. Speed set to traverse the full backlog distance in 3 seconds
+2. `feedBacklog` replays all backlog `WorldState`s into the same motion-segment queue used by live mode
+3. The arrow starts at the oldest observed position and receives preloaded world-clock segments
 4. Arrows immediately glide along their routes — visible movement from frame 1
 
 ---

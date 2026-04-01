@@ -8,7 +8,7 @@ Speed-colored route segments showing where traffic is flowing or stuck.
 
 1. **Server** (`packages/server/src/congestion/index.ts`): On every fresh poll, records per-vehicle speed into 200m route segments. Maintains a 10-minute sliding window. Sends the full snapshot to new WebSocket clients in the `init` message.
 
-2. **Client** (`packages/client/src/layers.ts`): Seeds from the server snapshot on connect. After that, accumulates locally from `feedTick` whenever a vehicle's feed timestamp changes and it has moved. Fills all segments between previous and current position.
+2. **Client** (`packages/client/src/layers.ts`): Seeds from the server snapshot on connect. After that, accumulates locally from `feedWorldState()` whenever a vehicle's feed timestamp changes and it has moved. Fills all segments between previous and current position.
 
 3. **Playback**: `buildHeatmapForTime()` in `playback.ts` replays the 10-minute window of snapshots through `recordHeatmapOnly()` — a dedicated function that tracks positions without touching animation state.
 
@@ -19,7 +19,7 @@ Server poll → recordCongestion() → per-segment speed ring buffer
                                   ↓ (on WS connect)
                           getCongestion() → init message → client seedHeatmap()
                                                           ↓
-Client feedTick → recordSegmentSpeed() → heatmapData (local ring buffer)
+Client feedWorldState() → recordSegmentSpeed() → heatmapData (local ring buffer)
                                         ↓ (every frame, if dirty)
                                 createHeatmapLayer() → deck.gl PathLayer
 ```

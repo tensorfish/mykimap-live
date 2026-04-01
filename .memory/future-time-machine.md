@@ -95,7 +95,7 @@ The client streams 30-minute Parquet chunks on demand using [DuckDB-WASM](https:
 7. Buffer bar on slider shows loaded ranges (like YouTube's gray bar)
 8. Old chunks evicted (LRU, max 4 loaded) to bound memory at ~20–50 MB
 
-**Key constraint:** `applyTick()` and the rendering pipeline must not care whether the data came from a live WebSocket tick or a historical DuckDB query. Same `WorldState` shape, same code path.
+**Key constraint:** `applyTick()` and the rendering pipeline must not care whether the data came from a live WebSocket tick or a historical DuckDB query. Same `WorldState` shape, same code path. `WorldState` now includes `tickTimeMs` so both live and playback can derive constant-velocity motion segments from an authoritative clock.
 
 ---
 
@@ -107,7 +107,7 @@ If any of these are violated, the time machine becomes a rewrite instead of an a
 
 2. **`processSnapshot()` output is self-contained.** The `VehiclePosition[]` after processing has everything needed to render (lat, lon, bearing, speed, mode, route). ✅ Already true.
 
-3. **`WorldState` is the single interchange format.** Live broadcast and historical playback produce the same shape. ✅ Already true.
+3. **`WorldState` is the single interchange format.** Live broadcast and historical playback produce the same shape, including `tickTimeMs` for segment timing. ✅ Already true.
 
 4. **`applyTick()` accepts any `WorldState` regardless of source.** ✅ Already true.
 
