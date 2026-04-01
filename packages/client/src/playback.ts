@@ -20,7 +20,6 @@ import {
   getAllSnapshots,
   getVehicleTimelines,
   getBufferedRanges,
-  getSnapshotMeta,
   findSnapshotIndex,
   isLoaded,
 
@@ -228,9 +227,49 @@ function checkPrefetch(): void {
   }
 }
 
+function sampleTimelinePosition(
+  vehicle: VehiclePosition,
+  ts: number,
+): { latitude: number; longitude: number } {
+  const tl = getVehicleTimelines().get(vehicle.entityId);
+  if (!tl || tl.waypoints.length === 0) {
+    return { latitude: vehicle.latitude, longitude: vehicle.longitude };
+  }
+
+  // Advance the cursor so nextIdx is the first waypoint strictly after ts.
+  while (tl.nextIdx < tl.waypoints.length - 1 && tl.waypoints[tl.nextIdx]!.ts <= ts) {
+    tl.nextIdx++;
+  }
+
+  const nextIdx = Math.min(tl.nextIdx, tl.waypoints.length - 1);
+  const next = tl.waypoints[nextIdx]!;
+  const prev = nextIdx > 0 ? tl.waypoints[nextIdx - 1]! : null;
+
+  if (!prev) {
+    return { latitude: next.lat, longitude: next.lon };
+  }
+
+  if (ts <= prev.ts) {
+    return { latitude: prev.lat, longitude: prev.lon };
+  }
+
+  const dt = next.ts - prev.ts;
+  if (dt <= 0) {
+    return { latitude: next.lat, longitude: next.lon };
+  }
+
+  const t = Math.max(0, Math.min(1, (ts - prev.ts) / dt));
+  return {
+    latitude: prev.lat + (next.lat - prev.lat) * t,
+    longitude: prev.lon + (next.lon - prev.lon) * t,
+  };
+}
+
 /**
- * Feed the current snapshot into the animation pipeline.
- * Uses per-vehicle timelines for smooth movement.
+ * Feed the current snapshot into the shared animation pipeline.
+ * Playback samples each vehicle's prebuilt movement timeline at the
+ * current playback timestamp, so duplicate historical snapshots still
+ * produce continuous motion between real position changes.
  */
 function feedCurrentSnapshot(): void {
   const allSnaps = getAllSnapshots();
@@ -242,25 +281,11 @@ function feedCurrentSnapshot(): void {
 
   const snap = allSnaps[idx]!;
   const ts = playback.currentTimestamp;
-  const timelines = getVehicleTimelines();
   const prevVehicles = idx > 0 ? new Map(allSnaps[idx - 1]!.vehicles.map((v) => [v.entityId, v])) : null;
   const nextVehicles = idx < allSnaps.length - 1 ? new Map(allSnaps[idx + 1]!.vehicles.map((v) => [v.entityId, v])) : null;
 
   const vehicles: VehiclePosition[] = snap.vehicles.map((v) => {
-    const tl = timelines.get(v.entityId);
-
-    let latitude = v.latitude;
-    let longitude = v.longitude;
-    if (tl && tl.waypoints.length > 0) {
-      // Advance timeline index past current playback time
-      while (tl.nextIdx < tl.waypoints.length - 1 && tl.waypoints[tl.nextIdx]!.ts <= ts) {
-        tl.nextIdx++;
-      }
-
-      const wp = tl.waypoints[Math.min(tl.nextIdx, tl.waypoints.length - 1)]!;
-      latitude = wp.lat;
-      longitude = wp.lon;
-    }
+    const { latitude, longitude } = sampleTimelinePosition(v, ts);
 
     return {
       ...v,

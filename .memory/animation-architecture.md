@@ -118,6 +118,7 @@ User picks date
   → load first 30-min chunk (~4–13 MB Parquet)
   → chunk manager: register in DuckDB-WASM, decode, build timelines
   → advancePlayback: advance timestamp, feed snapshot when crossed
+  → sample each vehicle's historical movement timeline at the current playback timestamp
   → applyTick → store
   → feedWorldState: clientSnapToShape (raw GPS → shapeDist), append motion segments
   → derive semantic speed from neighboring historical snapshot datapoints for UI/panel display
@@ -135,7 +136,9 @@ Seek to unloaded time:
 
 Playback does **not** download the entire day's Parquet upfront. The chunk manager (`playback-chunks.ts`) streams 30-minute chunks on demand. A buffer bar on the slider shows loaded ranges (like YouTube's gray bar).
 
-The only difference from live mode is the first steps (metadata → chunk → decode). Everything from `feedWorldState` onward is identical.
+Because playback has future history available inside the loaded chunk, it first samples each vehicle's prebuilt movement timeline at the current playback timestamp. That reconstructs in-between positions across duplicate cached historical snapshots, so playback remains continuous even when the recorded feed repeated the same raw position for one or more polls.
+
+The only difference from live mode is the first steps (metadata → chunk → decode → timeline sampling). Everything from `feedWorldState` onward is identical.
 
 ---
 
