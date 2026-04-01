@@ -333,6 +333,7 @@ interface VehicleAnim {
   shapeKey: string;
   lastTs: number; // vehicle timestamp from last feed
   lastHeatmapDist: number; // previous dist for heatmap segment fill
+  lastSpeedDist: number; // dist at last timestamp change, for correct speed calc
 }
 
 const anims = new Map<string, VehicleAnim>();
@@ -393,6 +394,7 @@ export function feedBacklog(backlog: Array<{ vehicles: VehiclePosition[] }>): vo
       shapeKey: getShapeCacheKey(v),
       lastTs: 0,
       lastHeatmapDist: startDist,
+      lastSpeedDist: startDist,
     });
   }
 }
@@ -411,14 +413,22 @@ export function feedTick(vehicles: VehiclePosition[]): void {
     if (existing) {
       const lastTarget = existing.targets[existing.targets.length - 1] ?? existing.currentDist;
       const moveDist = Math.abs(dist - lastTarget);
-      const snapDt = existing.lastTs > 0 ? Math.abs(v.timestamp - existing.lastTs) : 30;
 
       if (moveDist > MIN_MOVE_THRESHOLD_M) {
         existing.targets.push(dist);
+      }
 
-        if (snapDt > 0 && moveDist > MIN_SPEED_DIST_M) {
-          existing.speed = moveDist / snapDt;
+      // Update speed when the vehicle's feed timestamp changes (actual new GPS fix).
+      // Use total distance from the previous timestamp change, not the last queued
+      // target — the queue accumulates many small interpolated steps from 1s broadcasts,
+      // but the real vehicle movement spans the full ~30s feed update interval.
+      if (v.timestamp !== existing.lastTs && existing.lastTs > 0) {
+        const speedDist = Math.abs(dist - existing.lastSpeedDist);
+        const dt = v.timestamp - existing.lastTs;
+        if (dt > 0) {
+          existing.speed = speedDist > MIN_SPEED_DIST_M ? speedDist / dt : 0;
         }
+        existing.lastSpeedDist = dist;
       }
 
       // Record into heatmap when vehicle timestamp changes (actual feed update).
@@ -440,6 +450,7 @@ export function feedTick(vehicles: VehiclePosition[]): void {
         shapeKey: getShapeCacheKey(v),
         lastTs: v.timestamp,
         lastHeatmapDist: dist,
+        lastSpeedDist: dist,
       });
     }
   }
@@ -572,10 +583,14 @@ export function computeFrame(vehicles: VehiclePosition[], dtMs: number): Display
       bearing = ((Math.atan2(sinSum, cosSum) * 180 / Math.PI) + 360) % 360;
     }
 
+    // Display speed: prefer server-computed v.speed (live mode, averaged over
+    // ~60s) when available; fall back to client-computed anim.speed (playback).
+    const displaySpeed = v.speed > 0 ? v.speed : anim.speed;
+
     return {
       entityId: v.entityId, mode: v.mode,
       position: pos, angle: -bearing,
-      stale: v.stale, speed: anim.speed,
+      stale: v.stale, speed: displaySpeed,
       bearing, routeId: v.routeId,
       vehicleId: v.vehicleId, vehicleLabel: v.vehicleLabel,
     };

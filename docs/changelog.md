@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Bug Fixes
+- **Fixed incorrect "Avg Speed" display for vehicles** — both live view and replay showed wrong speeds. The client-side speed calculation divided a single interpolation step (~1s of movement) by the full feed update interval (~30s), producing values ~30× too low. Fixed by tracking total distance between feed timestamp changes. In live mode, the server-computed average speed is now preferred for display.
+
 ### Architecture
 - **Single animation pipeline** — live and playback share the same `feedTick` → `computeFrame` → render chain. No duplicate animation code.
 - **Route-based animation** — vehicles animate along cached GTFS route shapes. Position, bearing, and trail all derived from shape geometry.
