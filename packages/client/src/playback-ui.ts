@@ -284,7 +284,7 @@ export function initPlaybackUI(): PlaybackUIControls {
     enterGeneration++; // invalidate any in-flight enterPlayback
     stopPlayback();
     bufferingOverlay.classList.remove("visible");
-    document.title = "Myki Map - Live Melbourne Transport";
+    document.title = "Myki Map - Live Victoria Transport";
     document.getElementById("vehicle-count")?.classList.remove("hidden");
 
     // Clean replay URL — go back to root without reload

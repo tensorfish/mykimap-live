@@ -3,16 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <title>Myki Map - Live Melbourne Transport</title>
-    <meta name="description" content="Real-time map of every tram, train, and bus in Melbourne. Watch 2,000+ vehicles move live across the city with route-following animation, congestion heatmaps, and historical playback." />
-    <meta name="keywords" content="Melbourne, transport, tram, train, bus, PTV, real-time, map, GTFS, myki, public transport, Victoria" />
+    <title>Myki Map - Live Victoria Transport</title>
+    <meta name="description" content="Live map of ~2,000 public transport vehicles across Victoria, Australia. Watch trams, trains, buses, and V/Line services move in real time with route-following animation, congestion heatmaps, and historical playback." />
+    <meta name="keywords" content="Melbourne, Victoria, transport, tram, train, bus, V/Line, PTV, real-time, map, GTFS, myki, public transport" />
     <meta name="author" content="Tensorfish" />
     <meta name="theme-color" content="#0a0a0e" />
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="Myki Map - Live Melbourne Transport" />
-    <meta property="og:description" content="Real-time map of every tram, train, and bus in Melbourne. 2,000+ vehicles moving live with congestion heatmaps and historical playback." />
+    <meta property="og:title" content="Myki Map - Live Victoria Transport" />
+    <meta property="og:description" content="Live map of ~2,000 public transport vehicles across Victoria, Australia with route-following animation, congestion heatmaps, and historical playback." />
     <meta property="og:image" content="/og.jpg" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="944" />
@@ -21,8 +21,8 @@
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Myki Map - Live Melbourne Transport" />
-    <meta name="twitter:description" content="Real-time map of every tram, train, and bus in Melbourne. 2,000+ vehicles moving live." />
+    <meta name="twitter:title" content="Myki Map - Live Victoria Transport" />
+    <meta name="twitter:description" content="Live map of ~2,000 public transport vehicles across Victoria, Australia. Trams, trains, buses, and V/Line moving in real time." />
     <meta name="twitter:image" content="/og.jpg" />
 
     <!-- Canonical -->
@@ -52,9 +52,65 @@
       <span id="status-info"></span>
       <button id="reconnect-btn">Reconnect</button>
       <div id="status-actions">
-        <button id="history-btn">History</button>
-        <button id="sound-btn" title="Toggle sound">🔇</button>
-        <a id="x-link" href="https://x.com/tensorfish" target="_blank" rel="noopener" title="@tensorfish on X">made by <span>@tensorfish</span></a>
+        <button id="history-btn" class="icon-btn" data-tooltip="Replay history" aria-label="Replay history">🕘</button>
+        <button id="sound-btn" class="icon-btn" data-tooltip="Toggle sound" aria-label="Toggle sound">🔇</button>
+        <button id="info-btn" class="icon-btn" data-tooltip="About this map" aria-label="About this map">?</button>
+      </div>
+    </div>
+
+    <a id="creator-badge" href="https://tensor.fish" target="_blank" rel="noopener" title="tensor.fish">made by <span>tensor.fish</span></a>
+
+    <div id="info-overlay" aria-hidden="true">
+      <div id="info-modal" role="dialog" aria-modal="true" aria-labelledby="info-title">
+        <div id="info-title">About this map</div>
+        <div id="info-body">
+          <div id="info-lead">Live map of ~2,000 public transport vehicles across Victoria, Australia.</div>
+
+          <div id="info-grid">
+            <div class="info-card">
+              <div class="info-card-label">What</div>
+              <div class="info-card-value">Real vehicles snapped to their actual route geometry</div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-label">Data</div>
+              <div class="info-card-value">10 GTFS-RT feeds from Victoria's open data portal</div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-label">Refresh</div>
+              <div class="info-card-value">Updated every 15 seconds</div>
+            </div>
+            <div class="info-card">
+              <div class="info-card-label">Replay</div>
+              <div class="info-card-value">Scrub back through historical data and replay the network</div>
+            </div>
+          </div>
+
+          <div class="info-section">
+            <div class="info-section-title">Colour by mode</div>
+            <div id="info-mode-list">
+              <div class="info-mode"><span class="info-swatch" style="background:#78BE20"></span>Trams</div>
+              <div class="info-mode"><span class="info-swatch" style="background:#34ACE1"></span>Trains</div>
+              <div class="info-mode"><span class="info-swatch" style="background:#FF8200"></span>Buses</div>
+              <div class="info-mode"><span class="info-swatch" style="background:#A57FB2"></span>V/Line</div>
+            </div>
+          </div>
+
+          <div class="info-section">
+            <div class="info-section-title">Why it exists</div>
+            <ul class="info-list">
+              <li>To show the whole public transport network as a live system instead of a timetable.</li>
+              <li>To make route geometry, movement patterns, and historical replay easy to explore.</li>
+            </ul>
+          </div>
+
+          <div id="info-footer">
+            <span>Feedback / suggestions → tensorfish[at]proton.me</span>
+            <a id="info-site-link" href="https://tensor.fish" target="_blank" rel="noopener">tensor.fish ↗</a>
+          </div>
+        </div>
+        <div id="info-actions">
+          <button id="info-close" class="btn-ghost">Close</button>
+        </div>
       </div>
     </div>
 
@@ -121,7 +177,7 @@
     <div id="vehicle-count"></div>
 
     <div id="legend">
-      <div id="legend-title">Melbourne Public Transport</div>
+      <div id="legend-title">Victoria Public Transport</div>
       <div id="legend-items">
         <div class="legend-row"><span class="dot" style="background:#34ACE1"></span> Metro Trains</div>
         <div class="legend-row"><span class="dot" style="background:#78BE20"></span> Trams</div>

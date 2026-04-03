@@ -1,6 +1,6 @@
 # mykimap
 
-Real-time map of every tram, train, and bus in Melbourne. ~2,000 vehicles moving live on a dark map with route-following animation, congestion heatmaps, and historical playback.
+Live map of ~2,000 public transport vehicles across Victoria, Australia. Trams, trains, buses, and V/Line services move in real time on a dark map with route-following animation, congestion heatmaps, and historical playback.
 
 ## Quickstart
 

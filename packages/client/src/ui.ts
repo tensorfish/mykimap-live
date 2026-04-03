@@ -31,8 +31,44 @@ export function initStatusBar(): void {
   const info = document.getElementById("status-info")!;
   const btn = document.getElementById("reconnect-btn")! as HTMLButtonElement;
   const soundBtn = document.getElementById("sound-btn")!;
+  const infoBtn = document.getElementById("info-btn")! as HTMLButtonElement;
+  const infoOverlay = document.getElementById("info-overlay")!;
+  const infoCloseBtn = document.getElementById("info-close")! as HTMLButtonElement;
 
   btn.addEventListener("click", () => { sounds.select(); reconnect(); });
+
+  function openInfoModal() {
+    infoOverlay.classList.add("visible");
+    infoOverlay.setAttribute("aria-hidden", "false");
+    infoCloseBtn.focus();
+  }
+
+  function closeInfoModal() {
+    infoOverlay.classList.remove("visible");
+    infoOverlay.setAttribute("aria-hidden", "true");
+    infoBtn.focus();
+  }
+
+  infoBtn.addEventListener("click", () => {
+    sounds.select();
+    openInfoModal();
+  });
+  infoCloseBtn.addEventListener("click", () => {
+    sounds.select();
+    closeInfoModal();
+  });
+  infoOverlay.addEventListener("click", (event) => {
+    if (event.target === infoOverlay) {
+      closeInfoModal();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && infoOverlay.classList.contains("visible")) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeInfoModal();
+    }
+  }, true);
 
   // Sound toggle — update icon on click
   function updateSoundBtn() {

@@ -20,6 +20,7 @@
 - **YouTube-style streaming playback** — 30-minute chunks loaded on demand instead of full-day download. Metadata endpoint for instant slider. Buffer bar shows loaded ranges. Inline buffering indicator.
 
 ### Features
+- **Status bar context + replay controls** — added a status-bar question-mark button that opens a structured about panel explaining what the map is, how the vehicle colours work, where the live data comes from, the historical replay feature, and how to send feedback. The creator link now points to `tensor.fish` instead of X as a subtle bottom-right badge, the history control now uses an icon button, the icon buttons show hover/focus tooltips, and the status-bar icon buttons use consistent sizing.
 - **Time machine** — DuckDB records raw feed data. DuckDB-WASM streams Parquet chunks in the browser. Date picker, time slider, speed control (1×/10×/60×/360×).
 - **Streaming playback** — click History, pick a date, slider is interactive in <2s (metadata only). Press play, first chunk loads in seconds. Prefetches ahead. No full-day download required.
 - **Shareable replay URLs** — `mykimap.live/replay/2026-03-23/08:00` opens directly into playback at that moment. URL updates as playback advances. Copy at any point to share.
